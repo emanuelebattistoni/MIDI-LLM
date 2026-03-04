@@ -122,13 +122,24 @@ def synthesize_midi_to_audio(
     try:
         wav_path = midi_path.replace(".mid", ".wav")
         
-        # Initialize FluidSynth
-        fs = midi2audio.FluidSynth(soundfont_path)
-        if samplerate is not None:
-            fs.sample_rate = samplerate
+        import subprocess # Lo aggiungiamo per assicurarci che possa lanciare i comandi
         
-        # Synthesize MIDI to WAV
-        fs.midi_to_audio(midi_path, wav_path)
+        # Calcola il sample rate
+        sr_val = str(samplerate) if samplerate is not None else "44100"
+        
+        # Costruisce il comando aggirando il bug di FluidSynth 2.5+
+        # (Le opzioni -ni, -r, -F DEVONO stare prima dei file)
+        cmd = [
+            "fluidsynth", 
+            "-ni", 
+            "-r", sr_val, 
+            "-F", wav_path, 
+            soundfont_path, 
+            midi_path
+        ]
+        
+        # Lancia il comando in modo invisibile senza stampare scritte inutili
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         # Load and trim silence from audio
         wav, sr = librosa.load(wav_path)
