@@ -79,7 +79,7 @@ def has_excessive_notes_at_any_time(
     """
     # Convert to tensor if needed
     if isinstance(tokens, list):
-        tokens = torch.tensor(tokens)   normalizza i dati a tensori
+        tokens = torch.tensor(tokens)  # normalizza i dati a tensori
     
     # Extract time tokens (every 3rd token in the sequence: time, duration, note)
     times = tokens[::3] #estrae solo i token del tempo
@@ -97,11 +97,12 @@ def has_excessive_notes_at_any_time(
 # ============================================================================
 
 def synthesize_midi_to_audio(
-    midi_path: str, 
-    soundfont_path: str,
-    save_mp3: bool = True,
-    samplerate: Optional[int] = None,
-    target_loudness: float = -18.0
+   #prende in input 
+    midi_path: str,   #path del midi  
+    soundfont_path: str,   #path del soundfont 
+    save_mp3: bool = True, #se il file deve essere convertito in mp3 
+    samplerate: Optional[int] = None,  #il samplerate se presente 
+    target_loudness: float = -18.0     #il target di loudness del brano 
 ) -> bool:
     """
     Synthesize MIDI file to audio (WAV/MP3) using FluidSynth with loudness normalization.
@@ -130,19 +131,19 @@ def synthesize_midi_to_audio(
         # Calcola il sample rate
         sr_val = str(samplerate) if samplerate is not None else "44100"
         
-        # Costruisce il comando aggirando il bug di FluidSynth 2.5+
+        # Costruisce il comando aggirando il bug di FluidSynth 2.5+(Se metti -F (l'ordine di salvare su file) dopo i nomi dei file, FluidSynth pensa che -F sia un altro file musicale da suonare.)
         # (Le opzioni -ni, -r, -F DEVONO stare prima dei file)
         cmd = [
             "fluidsynth", 
-            "-ni", 
-            "-r", sr_val, 
-            "-F", wav_path, 
-            soundfont_path, 
+            "-ni",             #non interactive 
+            "-r", sr_val,      #usa ilsample rate dato 
+            "-F", wav_path,    #rendering veloce su file  
+            soundfont_path,     
             midi_path
         ]
         
         # Lancia il comando in modo invisibile senza stampare scritte inutili
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  #abbiamo bypassato la libreria 
         
         # Load and trim silence from audio
         wav, sr = librosa.load(wav_path)    #Utilizza la libreria librosa per avere il wav ed il sr
@@ -174,7 +175,7 @@ def synthesize_midi_to_audio(
             if samplerate is None:
                 cmd = f"ffmpeg -i {wav_path} -codec:a libmp3lame -qscale:a 2 {mp3_path} -y >/dev/null 2>&1"
                 """prende come input il wav masterizzato, usa l'encoder lame, imposta la qualità a 2 (190-250 kbps), se il file esiste 
-                già lo sovrascrive senza chiedere il permesso,>/dev/null 2>&1 Impedisce a FFmpeg di riempire il tuo terminale di scritte""" tecniche
+                già lo sovrascrive senza chiedere il permesso,>/dev/null 2>&1 Impedisce a FFmpeg di riempire il tuo terminale di scritte tecniche""" 
             else:
                 cmd = f"ffmpeg -i {wav_path} -codec:a libmp3lame -qscale:a 2 -ar {samplerate} {mp3_path} -y >/dev/null 2>&1"
                 #se è stato specificato un sr forza FFmpeg ad usare quella definizione sonora nella conversione finale    
@@ -196,13 +197,14 @@ def synthesize_midi_to_audio(
 # ============================================================================
 
 def save_generation(
-    tokens: List[int],
-    prompt: str,
-    output_dir: Path,
-    generation_idx: int,
-    soundfont_path: Optional[str] = None,
-    synthesize: bool = False,
-    validate: bool = True
+   #prende in input 
+    tokens: List[int], #una lista di tokens midi 
+    prompt: str,       #il prompt inserito 
+    output_dir: Path,  #il path della directory di output    
+    generation_idx: int,   #indice della generazione 
+    soundfont_path: Optional[str] = None,  # il path del soundfont 
+    synthesize: bool = False, #imposta di default syntesize a False  
+    validate: bool = True  #imposta di default validate a True 
 ) -> bool:
     """
     Save generated tokens as MIDI file (and optionally audio).
@@ -262,4 +264,3 @@ def save_generation(
     except Exception as e:
         print(f"  ✗ Error saving generation {generation_idx}: {e}")
         return False
-

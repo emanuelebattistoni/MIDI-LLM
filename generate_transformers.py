@@ -17,6 +17,7 @@ from typing import List, Optional # Aiutano chi legge il codice a capire che tip
 import torch # Framework principale usato per il calcolo tensoriale e il deep learning
 import tqdm # Libreria puramente visiva
 from transformers import AutoTokenizer, AutoModelForCausalLM # Classi principali della libreria di Hugging Face
+from transformers import StoppingCriteria, StoppingCriteriaList    #aggiunto per la barra di caricamento 
 # AutoTokenizer: Traduce il testo umano in una sequenza di(token)
 # AutoModelForCausalLM: Carica i pesi del modello vero e proprio
 
@@ -28,9 +29,97 @@ from midi_llm.utils import (
     LLAMA_MODEL_NAME,   #meta-llama/Llama-3.2-1B
 )
 
+import mido
+
+# Mappa standard General MIDI
+GM_INSTRUMENTS = {
+    # --- Piano (0-7) ---
+    0: "Acoustic Grand Piano", 1: "Bright Acoustic Piano", 2: "Electric Grand Piano",
+    3: "Honky-tonk Piano", 4: "Electric Piano 1", 5: "Electric Piano 2",
+    6: "Harpsichord", 7: "Clavinet",
+    8: "Celesta", 9: "Glockenspiel", 10: "Music Box", 11: "Vibraphone",
+    12: "Marimba", 13: "Xylophone", 14: "Tubular Bells", 15: "Dulcimer",
+    16: "Drawbar Organ", 17: "Percussive Organ", 18: "Rock Organ", 19: "Church Organ",
+    20: "Reed Organ", 21: "Accordion", 22: "Harmonica", 23: "Tango Accordion",
+    24: "Acoustic Guitar (nylon)", 25: "Acoustic Guitar (steel)", 26: "Electric Guitar (jazz)",
+    27: "Electric Guitar (clean)", 28: "Electric Guitar (muted)", 29: "Overdriven Guitar",
+    30: "Distortion Guitar", 31: "Guitar Harmonics",
+    32: "Acoustic Bass", 33: "Electric Bass (finger)", 34: "Electric Bass (pick)",
+    35: "Fretless Bass", 36: "Slap Bass 1", 37: "Slap Bass 2",
+    38: "Synth Bass 1", 39: "Synth Bass 2",
+    40: "Violin", 41: "Viola", 42: "Cello", 43: "Contrabass",
+    44: "Tremolo Strings", 45: "Pizzicato Strings", 46: "Orchestral Harp", 47: "Timpani",
+    48: "String Ensemble 1", 49: "String Ensemble 2", 50: "SynthStrings 1",
+    51: "SynthStrings 2", 52: "Choir Aahs", 53: "Voice Oohs",
+    54: "Synth Voice", 55: "Orchestra Hit",
+    56: "Trumpet", 57: "Trombone", 58: "Tuba", 59: "Muted Trumpet",
+    60: "French Horn", 61: "Brass Section", 62: "SynthBrass 1", 63: "SynthBrass 2",
+    64: "Soprano Sax", 65: "Alto Sax", 66: "Tenor Sax", 67: "Baritone Sax",
+    68: "Oboe", 69: "English Horn", 70: "Bassoon", 71: "Clarinet",
+    72: "Piccolo", 73: "Flute", 74: "Recorder", 75: "Pan Flute",
+    76: "Blown Bottle", 77: "Shakuhachi", 78: "Whistle", 79: "Ocarina",
+    80: "Lead 1 (square)", 81: "Lead 2 (sawtooth)", 82: "Lead 3 (calliope)",
+    83: "Lead 4 (chiff)", 84: "Lead 5 (charang)", 85: "Lead 6 (voice)",
+    86: "Lead 7 (fifths)", 87: "Lead 8 (bass + lead)",
+    88: "Pad 1 (new age)", 89: "Pad 2 (warm)", 90: "Pad 3 (polysynth)",
+    91: "Pad 4 (choir)", 92: "Pad 5 (bowed)", 93: "Pad 6 (metallic)",
+    94: "Pad 7 (halo)", 95: "Pad 8 (sweep)",
+    96: "FX 1 (rain)", 97: "FX 2 (soundtrack)", 98: "FX 3 (crystal)",
+    99: "FX 4 (atmosphere)", 100: "FX 5 (brightness)", 101: "FX 6 (goblins)",
+    102: "FX 7 (echoes)", 103: "FX 8 (sci-fi)",
+    104: "Sitar", 105: "Banjo", 106: "Shamisen", 107: "Koto",
+    108: "Kalimba", 109: "Bagpipe", 110: "Fiddle", 111: "Shanai",
+    112: "Tinkle Bell", 113: "Agogo", 114: "Steel Drums", 115: "Woodblock",
+    116: "Taiko Drum", 117: "Melodic Tom", 118: "Synth Drum", 119: "Reverse Cymbal",
+    120: "Guitar Fret Noise", 121: "Breath Noise", 122: "Seashore",
+    123: "Bird Tweet", 124: "Telephone Ring", 125: "Helicopter",
+    126: "Applause", 127: "Gunshot"
+}
+
+def get_instruments_from_tokens(tokens: List[int]) -> List[str]:
+    """Estrae i nomi degli strumenti analizzando i token in memoria."""
+    found_instruments = set()
+    for i in range(len(tokens) - 1):
+        # I byte 192-207 indicano un cambio strumento sui 16 canali MIDI
+        if 192 <= tokens[i] <= 207:
+            instr_id = tokens[i + 1]
+            if 0 <= instr_id <= 127:
+                name = GM_INSTRUMENTS.get(instr_id, f"Unknown ({instr_id})")
+                found_instruments.add(name)
+    
+    # Ritorna Grand Piano se la lista è vuota (default MIDI)
+    return list(found_instruments) if found_instruments else [GM_INSTRUMENTS[0]]
+
+class ProgressMonitor(StoppingCriteria):
+    def __init__(self, max_new_tokens, prompt_length):
+        self.prompt_length = prompt_length
+        # Creiamo la barra con un formato puramente grafico e di velocità
+        self.pbar = tqdm.tqdm(
+            total=max_new_tokens, 
+            desc="  ↳ Generating:", 
+            position=1, 
+            leave=False,
+            # {bar} crea i blocchi, rimuoviamo {n_fmt} (i numeri nudi)
+            bar_format="{desc}: {percentage:3.0f}% |{bar}| [{elapsed}<{remaining}, {rate_fmt}]"
+        )
+        
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        # Calcola quante note sono state scritte
+        current_tokens = input_ids.shape[1] - self.prompt_length
+        increment = current_tokens - self.pbar.n
+        
+        # Fa avanzare la barra visiva
+        if increment > 0:
+            self.pbar.update(increment)
+            
+        return False 
+        
+    def close(self):
+        self.pbar.close()
+
 # Default generation parameters
-DEFAULT_TEMPERATURE = 1.0   #Le probabilit� si "appiattiscono". Il modello inizia a dare una chance anche a note meno scontate
-DEFAULT_TOP_P = 0.98    #Nucleus Sampling, scarta a priori il 2% delle note pi� assurde e improbabili
+DEFAULT_TEMPERATURE = 1.0   #Le probabilita' si "appiattiscono". Il modello inizia a dare una chance anche a note meno scontate
+DEFAULT_TOP_P = 0.98    #Nucleus Sampling, scarta a priori il 2% delle note piu' assurde e improbabili
 DEFAULT_MAX_TOKENS = 2046   #Lunghezza massima della composizione generata
 DEFAULT_N_OUTPUTS = 4  # give more outputs for variability
 
@@ -60,25 +149,26 @@ def prepare_hf_model(model_path: str):
         trust_remote_code=True  # Diamo il permesso al computer di eseguire il codice che ha allegato al modello
     ).to(device="cuda")         # Trasferisce l'intero modello nella VRAM della scheda video NVIDIA
     
-    model.eval()    # Passa alla modalit� di inferenza congelando i pesi
-    print(f" Model loaded successfully\n")
+    model.eval()    # Passa alla modalita' di inferenza congelando i pesi
+    print(f" Model loaded successfully\n")
     
-    return model    # Restituisce il modello intero, gi� caricato nella GPU e pronto all'uso
+    return model    # Restituisce il modello intero, gia' caricato nella GPU e pronto all'uso
 
 
 def generate_from_prompts_hf(
+   #prende in input 
     model,                      # Il modello caricato
     tokenizer: AutoTokenizer,   # Il tokenizer del modello caricato
     prompts: List[str],         # Lista dei prompt scritti
-    output_dir: Path,           # Path della cartella principale dove la funzione dovr� creare le sottocartelle per salvare i file
-    model_path: str,            # Il nome del modello caricato
+    output_dir: Path,           # Path della cartella principale dove la funzione dovra' creare le sottocartelle per salvare i file
+    model_path: str,            # Path per il modello da caricare
     soundfont_path: Optional[str] = None,
-    synthesize: bool = False,   # Dato che � false la funzione non tenter� di convertire il file MIDI in mp3.
+    synthesize: bool = False,   # Dato che e' false la funzione non tentera' di convertire il file MIDI in mp3.
     temperature: float = DEFAULT_TEMPERATURE,
     top_p: float = DEFAULT_TOP_P,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     n_outputs: int = DEFAULT_N_OUTPUTS,
-    system_prompt: Optional[str] = None # Dato che � impostato a None, il codice utilizzer� quello di default
+    system_prompt: Optional[str] = None # Dato che e' impostato a None, il codice utilizzera' quello di default
 ) -> dict:
     """
     Generate MIDI from text prompts using HuggingFace model.
@@ -100,7 +190,7 @@ def generate_from_prompts_hf(
     Returns:
         Dictionary with generation statistics and output files
     """
-    # Default system prompt
+    # Default system prompt--> da modificare quando viene rifatto il training
     if system_prompt is None:
         system_prompt = "You are a world-class composer. Please compose some music according to the following description: "
     
@@ -108,8 +198,9 @@ def generate_from_prompts_hf(
         "total_prompts": len(prompts),  # Conta il numero di prompt inseriti
         "successful_generations": 0,    # Inizializza le generazioni avvenute con successo a 0
         "failed_generations": 0,        # Inizializza le generazioni avvenute senza successo a 0
-        "generation_times": [],         # Crea una lista vuota dove salver� il tempio impiegato per le generazioni
-        "output_files": []              # Crea una lista vuota in cui andr� a salvare i percorsi esatti
+        "generation_times": [],         # Crea una lista vuota dove salvera' il tempio impiegato per le generazioni
+        "output_files": [],              # Crea una lista vuota in cui andra' a salvare i percorsi esatti
+        "midi_instruments": {}          #aggiunge una lista vuota per gli strumenti utilizzati    
     }
     
     """Avvia il ciclo:
@@ -138,8 +229,8 @@ def generate_from_prompts_hf(
         
         # Add MIDI BOS token
         """ Viene calcolato il token MIDI Beginning of Sequence e viene trasformato in tensore dalla torch.tensor, in modo che venga
-        concatenato poi dalla torch.cat a quello che � il tensore ricavato precedentemente dal tokenizer. Cos� il modello � obbligato
-        a generare un nota musicale poich� grazie alla fase di training � addestrato a procedere cos�. Dim � impostata a 1 per far si che
+        concatenato poi dalla torch.cat a quello che e' il tensore ricavato precedentemente dal tokenizer. Cosi' il modello e' obbligato
+        a generare un nota musicale poiche' grazie alla fase di training e' addestrato a procedere cosi'. Dim e' impostata a 1 per far si che
         il midi_bos venga concatenato in colonna data la struttura del dato (Batch, Sequenza), allungando quindi la sequenza e non creando
         un ulteriore riga"""
         
@@ -149,17 +240,23 @@ def generate_from_prompts_hf(
         # Move to device
         """ Il comando model.parameters() restituisce un generatore(un oggetto che contiene tutti i parametri),
         next serve ad estrarre il primo elemento disponibile da un generatore,
-        .device serve a capire se quel componente � su CPU o GPU e tale informazione viene salvata in "device
-        .to(device) serve a spostare i dati dove � stato caricato il modello """
+        .device serve a capire se quel componente e' su CPU o GPU e tale informazione viene salvata in "device
+        .to(device) serve a spostare i dati dove e' stato caricato il modello """
       
         
         device = next(model.parameters()).device
-        input_ids = input_ids.to(device)    # Spostiamo i dati dove � stato caricato il modello
+        input_ids = input_ids.to(device)    # Spostiamo i dati dove e' stato caricato il modello
         
         # Generate multiple outputs
         start_time = time.time()    # Start del cronometro per il benchmarking
         
-        with torch.no_grad():       # Passa alla modalit� inferenza, evitando di salvare i passaggi intermedi
+        # 1. Misura quanti token occupa la nostra richiesta testuale
+        prompt_len = input_ids.shape[1]
+        
+        # 2. Passa ENTRAMBI i valori al monitor (limite massimo e lunghezza iniziale)
+        monitor = ProgressMonitor(max_tokens, prompt_len) # Inizializza il monitor passando i token massimi
+
+        with torch.no_grad():       # Passa alla modalita' inferenza, evitando di salvare i passaggi intermedi
             outputs = model.generate(
                 input_ids=input_ids,    # Passa al modello il tensore costruito fino a questo punto
                 do_sample=True,         # Se settato su false resttuisce solo la nota pi� probabile, cos� varia
@@ -168,7 +265,10 @@ def generate_from_prompts_hf(
                 top_p=top_p,
                 num_return_sequences=n_outputs,
                 pad_token_id=tokenizer.pad_token_id,
+                stopping_criteria=StoppingCriteriaList([monitor])  #aggiunta per la barra di avanzamento 
             )
+
+        monitor.close() # Chiude la barra secondaria quando ha finito
         
         generation_time = time.time() - start_time  # Calcola il tempo impiegato nella generazione
         
@@ -179,7 +279,7 @@ def generate_from_prompts_hf(
         
         # Extract only the generated tokens (remove prompt)
         prompt_len = input_ids.shape[1]     # Misura la lunghezza(in token) della richiesta iniziale
-        outputs = outputs[:, prompt_len:]   # Prende in considerazione solamente i token generati dall'ia
+        outputs = outputs[:, prompt_len:]   # Prende in considerazione solamente i token generati dall'ai
         
         # Shift tokens back to MIDI vocab range
         outputs = outputs - LLAMA_VOCAB_SIZE    # L'output viene shiftato nel range MIDI per far si che venga riconosciuta la nota
@@ -195,6 +295,7 @@ def generate_from_prompts_hf(
         for output_idx, midi_tokens in enumerate(outputs):
             # Save generation, Save generated tokens as MIDI file
             success = save_generation(
+               #input 
                 tokens=midi_tokens,     #Lista di numeri (note) puliti costruiti in precedenza
                 prompt=prompt,          #descrizione testuale originale
                 output_dir=prompt_output_dir,   #Cartella specifica nella quale deve essere salvato il prompt
@@ -204,10 +305,20 @@ def generate_from_prompts_hf(
             )
             
             if success:
-                successful_outputs += 1     #aggiorna il contatore
-                # Track output files
-                midi_file = prompt_output_dir / f"gen_{output_idx + 1}.mid" #Viene costruito il nome del file .mid
-                prompt_files.append(str(midi_file))                         #viene aggiunto alla lista dei file
+                successful_outputs += 1
+                midi_file = prompt_output_dir / f"gen_{output_idx + 1}.mid"
+                prompt_files.append(str(midi_file))
+                
+                try:
+                    # Analisi diretta dei token per trovare i Program Change
+                    nomi_strumenti = get_instruments_from_tokens(midi_tokens)
+                    
+                    # Usiamo il percorso relativo per evitare sovrascritture nel JSON
+                    relative_path = str(midi_file.relative_to(output_dir))
+                    stats["midi_instruments"][relative_path] = nomi_strumenti
+                except Exception as e:
+                    stats["midi_instruments"][str(midi_file.name)] = f"Errore: {str(e)}"
+                    
                 if synthesize and soundfont_path:                           #se attiva l'opzione viene costruito il nome del file .mp3
                     mp3_file = prompt_output_dir / f"gen_{output_idx + 1}.mp3"
                     if mp3_file.exists():
@@ -261,7 +372,7 @@ Examples:
     )
 
     """Crea mutua esclusione tra i comandi dalla riga di comando e i comandi passati da un file di testo, con required = false permette
-    all'utente di non scegliere la modalit� permettendo allo script di avviarsi ache se l'utente vuole inserire i prompt a mano in un
+    all'utente di non scegliere la modalita' permettendo allo script di avviarsi ache se l'utente vuole inserire i prompt a mano in un
     secondo momento"""
     
     # Input arguments (not required if using --interactive only) 
@@ -309,7 +420,7 @@ Examples:
     
     parser.set_defaults(synthesize=True)    #setta il default a true
     
-    #aggiunge il soundfont, quello di base � FluidR3
+    #aggiunge il soundfont, quello di base e' FluidR3
     parser.add_argument(
         "--soundfont",
         type=str,
@@ -412,7 +523,7 @@ Examples:
             prompts=prompts,
             output_dir=output_dir,
             model_path=args.model,
-            soundfont_path=args.soundfont if args.synthesize else None, # Se la sintesi � disattivata, invia None invece del percorso del file, risparmiando memoria
+            soundfont_path=args.soundfont if args.synthesize else None, # Se la sintesi e' disattivata, invia None invece del percorso del file, risparmiando memoria
             synthesize=args.synthesize,
             temperature=args.temperature,
             top_p=args.top_p,
@@ -439,9 +550,9 @@ Examples:
 
         # Print generated files
         if stats['output_files']:       #controlla se ci sono dei file di output generati
-            print(f"\nGenerated files:")    
+            print(f"\nGenerated files:")   #stampa i file generati 
             for file_path in stats['output_files']:
-                file_type = "<� MIDI" if file_path.endswith('.mid') else "<� Audio"
+                file_type = "< MIDI" if file_path.endswith('.mid') else "< Audio"
                 print(f"  {file_type}: {file_path}")
 
         print(f"{'='*70}\n")
@@ -478,7 +589,7 @@ Examples:
                 user_prompt = input("Prompt: ").strip() #prende input da tastiera andando a eliminare gli \n accidentali all'inizio o alla fine del testo
 
                 # Exit if empty
-                if not user_prompt: # Se il prompt � vuoto
+                if not user_prompt: # Se il prompt e' vuoto
                     print("\nExiting interactive mode. Goodbye!")
                     break
 
@@ -503,14 +614,14 @@ Examples:
                 print(f"Input prompt: {user_prompt}")
 
                 # Print mini summary
-                print(f"\n Generated {interactive_stats['successful_generations']}/{args.n_outputs} outputs")
+                print(f"\n Generated {interactive_stats['successful_generations']}/{args.n_outputs} outputs")
                 if interactive_stats['generation_times']:
                     print(f"  Generation time: {interactive_stats['generation_times'][0]:.2f}s")
 
                 # Print file paths
                 if interactive_stats['output_files']:
                     for file_path in interactive_stats['output_files']:
-                        file_type = "<�" if file_path.endswith('.mid') else "<�"
+                        file_type = "<✓" if file_path.endswith('.mid') else "<✓"
                         print(f"  {file_type} {file_path}")
                 print()
 
