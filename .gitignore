@@ -210,3 +210,10 @@ __marimo__/
 soundfonts/
 generated_outputs/
 test_outputs/
+
+#reference data
+data/groove_reference_dataset/
+generated_outputs/
+*.mp3
+*.wav
+*.mid
