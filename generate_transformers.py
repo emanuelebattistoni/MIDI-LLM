@@ -5,14 +5,21 @@ MIDI-LLM: Text-to-MIDI Generation using HuggingFace Transformers
 This script generates MIDI files from text prompts using the MIDI-LLM model with HuggingFace backend.
 Simpler to set up than vLLM but slower for inference.
 """
-
+import os
+import sys
+import warnings
+import logging
+from transformers import logging as hf_logging
+warnings.filterwarnings("ignore", category=UserWarning)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+hf_logging.set_verbosity_error()
 import json # Serve per leggere e scrivere dati in formato JSON
 import time # Gestisce il tempo
 import argparse # Serve per creare interfacce a riga di comando
 from pathlib import Path # Modo moderno e orientato agli oggetti per gestire i percorsi dei file e delle cartelle
 from datetime import datetime # Serve per ottenere la data e l'ora correnti
 from typing import List, Optional # Aiutano chi legge il codice a capire che tipo di dato si aspetta una funzione, 
-#  optional indica che un parametro pu� anche essere nullo (None)
+#  optional indica che un parametro puo' anche essere nullo (None)
 
 import torch # Framework principale usato per il calcolo tensoriale e il deep learning
 import tqdm # Libreria puramente visiva
@@ -30,6 +37,10 @@ from midi_llm.utils import (
 )
 
 import mido
+
+# Import modulo clap 
+from midi_llm.evaluate_clap import init_clap, evaluate_audio_clap, is_clap_available
+
 
 # Mappa standard General MIDI
 GM_INSTRUMENTS = {
@@ -76,27 +87,43 @@ GM_INSTRUMENTS = {
     126: "Applause", 127: "Gunshot"
 }
 
-def get_instruments_from_tokens(tokens: List[int]) -> List[str]:
-    """Estrae i nomi degli strumenti analizzando i token in memoria."""
-    found_instruments = set()
-    for i in range(len(tokens) - 1):
-        # I byte 192-207 indicano un cambio strumento sui 16 canali MIDI
-        if 192 <= tokens[i] <= 207:
-            instr_id = tokens[i + 1]
-            if 0 <= instr_id <= 127:
-                name = GM_INSTRUMENTS.get(instr_id, f"Unknown ({instr_id})")
-                found_instruments.add(name)
+def get_instruments_from_midi_file(midi_path: str) -> List[str]:
+    """Extract instrument names, including implicit Drum Kits on Channel 10."""
+    try:
+        mid = mido.MidiFile(midi_path)
+        found_instruments = set()
+        has_drums = False
+        
+        for track in mid.tracks:
+            for msg in track:
+                # 1. Cerca i normali cambi di strumento (ignorando il canale batteria)
+                if msg.type == 'program_change' and msg.channel != 9:
+                    name = GM_INSTRUMENTS.get(msg.program, f"Unknown ({msg.program})")
+                    found_instruments.add(name)
+                
+                # 2. Cerca se ci sono note suonate sul Canale 10 (index 9)
+                elif msg.type in ['note_on', 'note_off'] and msg.channel == 9:
+                    has_drums = True
+
+        # Se ha rilevato note sul canale 10, aggiungiamo la batteria
+        if has_drums:
+            found_instruments.add("Drum Kit (Channel 10)")
+            
+        return list(found_instruments) if found_instruments else [GM_INSTRUMENTS[0]]
+    except Exception as e:
+        print(f"Error analyzing MIDI instruments: {e}")
+        return [GM_INSTRUMENTS[0]]
     
-    # Ritorna Grand Piano se la lista è vuota (default MIDI)
+    # Ritorna Grand Piano se la lista e' vuota (default MIDI)
     return list(found_instruments) if found_instruments else [GM_INSTRUMENTS[0]]
 
 class ProgressMonitor(StoppingCriteria):
     def __init__(self, max_new_tokens, prompt_length):
         self.prompt_length = prompt_length
-        # Creiamo la barra con un formato puramente grafico e di velocità
+        # Creiamo la barra con un formato puramente grafico e di velocita'
         self.pbar = tqdm.tqdm(
             total=max_new_tokens, 
-            desc="  ↳ Generating:", 
+            desc="Generating:", 
             position=1, 
             leave=False,
             # {bar} crea i blocchi, rimuoviamo {n_fmt} (i numeri nudi)
@@ -200,7 +227,8 @@ def generate_from_prompts_hf(
         "failed_generations": 0,        # Inizializza le generazioni avvenute senza successo a 0
         "generation_times": [],         # Crea una lista vuota dove salvera' il tempio impiegato per le generazioni
         "output_files": [],              # Crea una lista vuota in cui andra' a salvare i percorsi esatti
-        "midi_instruments": {}          #aggiunge una lista vuota per gli strumenti utilizzati    
+        "midi_instruments": {} , #aggiunge una lista vuota per gli strumenti utilizzati
+        "clap_scores" :{}
     }
     
     """Avvia il ciclo:
@@ -213,7 +241,7 @@ def generate_from_prompts_hf(
         
         # Create output directory for this prompt
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")    # Salva la data e l'orario di ricezione del prompt
-        prompt_output_dir = output_dir / f"{timestamp}_prompt_{idx+1}" # Crea il path della directory dove verr� salvato l'output del prompt
+        prompt_output_dir = output_dir / f"{timestamp}_prompt_{idx+1}" # Crea il path della directory dove verra' salvato l'output del prompt
         
         # Prepare full prompt, add space to the end of each prompt to match training
         full_prompt = system_prompt + prompt + " "
@@ -259,7 +287,7 @@ def generate_from_prompts_hf(
         with torch.no_grad():       # Passa alla modalita' inferenza, evitando di salvare i passaggi intermedi
             outputs = model.generate(
                 input_ids=input_ids,    # Passa al modello il tensore costruito fino a questo punto
-                do_sample=True,         # Se settato su false resttuisce solo la nota pi� probabile, cos� varia
+                do_sample=True,         # Se settato su false resttuisce solo la nota piu' probabile, cosi' varia
                 max_new_tokens=max_tokens,  
                 temperature=temperature,    
                 top_p=top_p,
@@ -287,7 +315,7 @@ def generate_from_prompts_hf(
         
         # Save all outputs for this prompt
         successful_outputs = 0      #inizializza il contatore degli output con successo a 0
-        prompt_files = []          # Inizializza una lista per salvare dopo in essa il path di tutto ci� che stiamo per salvare riguardo allo specifico prompt
+        prompt_files = []          # Inizializza una lista per salvare dopo in essa il path di tutto cio' che stiamo per salvare riguardo allo specifico prompt
         
         
         #outputs e' la lista di tutte le melodie che ha generato l'ia,  
@@ -309,21 +337,23 @@ def generate_from_prompts_hf(
                 midi_file = prompt_output_dir / f"gen_{output_idx + 1}.mid"
                 prompt_files.append(str(midi_file))
                 
-                try:
-                    # Analisi diretta dei token per trovare i Program Change
-                    nomi_strumenti = get_instruments_from_tokens(midi_tokens)
-                    
-                    # Usiamo il percorso relativo per evitare sovrascritture nel JSON
-                    relative_path = str(midi_file.relative_to(output_dir))
-                    stats["midi_instruments"][relative_path] = nomi_strumenti
-                except Exception as e:
-                    stats["midi_instruments"][str(midi_file.name)] = f"Errore: {str(e)}"
+                rel_path = str(midi_file.relative_to(output_dir))
+                stats["midi_instruments"][rel_path] = get_instruments_from_midi_file(str(midi_file))
                     
                 if synthesize and soundfont_path:                           #se attiva l'opzione viene costruito il nome del file .mp3
                     mp3_file = prompt_output_dir / f"gen_{output_idx + 1}.mp3"
                     if mp3_file.exists():
                         prompt_files.append(str(mp3_file))                  #viene aggiunto alla lista dei file
-        
+
+        if is_clap_available() and synthesize and successful_outputs > 0:
+            print(f"\n CLAP is evaluating {successful_outputs} tracks...")
+            for f_path in prompt_files:
+                if f_path.endswith('.mp3'):
+                    score = evaluate_audio_clap(prompt, f_path)
+                    rel_mp3_path = str(Path(f_path).relative_to(output_dir))
+                    stats["clap_scores"][rel_mp3_path] = round(score, 4)
+                    print(f"Score for {Path(f_path).name}: {score:.4f}")    
+
         print(f"Successfully saved {successful_outputs}/{n_outputs} outputs")
         stats["successful_generations"] += successful_outputs
         stats["failed_generations"] += (n_outputs - successful_outputs)
@@ -366,7 +396,7 @@ Examples:
     # Required arguments
     parser.add_argument(
         "--model",  #Etichetta per l'utente
-        type=str,   #qualsiasi cosa l'utente scriva verr� trattata come stringa
+        type=str,   #qualsiasi cosa l'utente scriva verra' trattata come stringa
         default="slseanwu/MIDI-LLM_Llama-3.2-1B",   #modello di default
         help="Path to MIDI-LLM model checkpoint, can be HuggingFace model ID or local path (default: slseanwu/MIDI-LLM_Llama-3.2-1B)"
     )
@@ -464,6 +494,12 @@ Examples:
         action="store_true",
         help="Enter interactive mode after initial generation (keep generating until empty prompt)"
     )
+
+    parser.add_argument(
+    "--use_clap",
+    action="store_true",
+    help="Use CLAP model to evaluate generated audio similarity"
+    )
    # trasforma una lunga stringa di testo scritta disordinatamente nel terminale in un oggetto pulito e organizzato che lo script puo' usare per lavorare
     args = parser.parse_args()
     
@@ -477,7 +513,7 @@ Examples:
     prompts = []    # Inizializza una lista vuota
     if args.prompt:     # Se il prompt viene inserito da riga di comando
         prompts = [args.prompt]     # Viene aggiunto alla lista
-    elif args.prompts_file:         # Se il prompt � contenuto in un file testuale
+    elif args.prompts_file:         # Se il prompt e' contenuto in un file testuale
         with open(args.prompts_file, "r") as f: # Viene aperto il file in lettura
             prompts = [line.strip() for line in f if line.strip()]  # Per ogni riga toglie gli spazi inutili e gli \n all'inizio e alla fine
         print(f"Loaded {len(prompts)} prompts from {args.prompts_file}") # Stampa che il prompt viene aggiunto alla lista
@@ -485,7 +521,7 @@ Examples:
     # Check synthesis requirements
     if args.synthesize:     # Se l'audio va sintetizzato in audio
         soundfont_path = Path(args.soundfont)   # Trasfroma il testo in un path
-        if not soundfont_path.exists():     #se il sountfont non � stato inserito
+        if not soundfont_path.exists():     #se il sountfont non e' stato inserito
             print(f"Error: SoundFont not found at {soundfont_path}")    #stampa il messaggio
             print("Please download a SoundFont or disable synthesis")  
             import sys
@@ -496,7 +532,7 @@ Examples:
     session_timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")  # Salva il time stamp corrente
     output_dir = output_root / session_timestamp    # Crea il nome della directory
     output_dir.mkdir(parents=True, exist_ok=True)   # Crea la directory
-    # Se la cartella principale non esiste, il programma la crea automaticamente, se la cartella esiste gi� il programma non crasha
+    # Se la cartella principale non esiste, il programma la crea automaticamente, se la cartella esiste giu' il programma non crasha
 
     print(f"Output directory: {output_dir.absolute()}\n")   # Stampa il percorso assoluto della cartella creata
 
@@ -510,6 +546,9 @@ Examples:
 
     # Load model
     model = prepare_hf_model(model_path=args.model)     # Carica il , modello utilizzando la funzione definita in precedenza
+    
+    if args.synthesize and args.use_clap:
+        init_clap()
 
     # Generate from initial prompts (if provided)
     if prompts: # Controlla se la lista dei prompts contiene qualcosa
@@ -621,7 +660,7 @@ Examples:
                 # Print file paths
                 if interactive_stats['output_files']:
                     for file_path in interactive_stats['output_files']:
-                        file_type = "<✓" if file_path.endswith('.mid') else "<✓"
+                        file_type = "<" if file_path.endswith('.mid') else "<"
                         print(f"  {file_type} {file_path}")
                 print()
 
@@ -632,6 +671,6 @@ Examples:
                 print("\n\nExiting interactive mode.")
                 break
 
-#Verifica come il file � stato aperto, se viene importato il file in un altro progetto, __name__ assumere il nome del file e non __main__
+#Verifica come il file e' stato aperto, se viene importato il file in un altro progetto, __name__ assumere il nome del file e non __main__
 if __name__ == "__main__":
     main()
