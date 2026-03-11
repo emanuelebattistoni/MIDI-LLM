@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import sys
 import torch
@@ -47,22 +46,32 @@ def evaluate_audio_clap(text_prompt: str, audio_path: str) -> float:
         return 0.0
     
     try:
-        # Extract text embedding
+        # 1. Omit use_tensor=True to allow the library to return its default NumPy arrays.
+        # This prevents internal type conflicts within the laion_clap library.
         text_embed = _clap_model_instance.get_text_embedding([text_prompt])
         
-        # Load audio at 48kHz (CLAP standard)
+        # Load the audio file at 48kHz (CLAP standard requirement)
         audio_data, _ = librosa.load(audio_path, sr=48000)
         audio_data = audio_data.reshape(1, -1)
         
-        # Extract audio embedding
-        audio_embed = _clap_model_instance.get_audio_embedding_from_data(x=audio_data, use_tensor=False)
+        # 2. Omit use_tensor=True here as well for consistency.
+        audio_embed = _clap_model_instance.get_audio_embedding_from_data(x=audio_data)
         
-        # Calculate cosine similarity using Torch
-        text_embed_t = torch.tensor(text_embed)
-        audio_embed_t = torch.tensor(audio_embed)
-        similarity = torch.nn.functional.cosine_similarity(text_embed_t, audio_embed_t)
+        # SAFE TENSOR CONVERSION
+        # Convert the raw NumPy arrays output by the library explicitly 
+        # into PyTorch Tensors (float32) to ensure safe mathematical operations.
+        text_embed_t = torch.from_numpy(text_embed).float()
+        audio_embed_t = torch.from_numpy(audio_embed).float()
+        
+        # Normalize the vectors (L2 norm) along the last dimension
+        text_embed_t = torch.nn.functional.normalize(text_embed_t, p=2, dim=-1)
+        audio_embed_t = torch.nn.functional.normalize(audio_embed_t, p=2, dim=-1)
+        
+        # Compute the cosine similarity
+        similarity = torch.nn.functional.cosine_similarity(text_embed_t, audio_embed_t, dim=-1)
         
         return float(similarity.item())
+        
     except Exception as e:
         print(f"Error during CLAP evaluation for {audio_path}: {e}")
         return -1.0

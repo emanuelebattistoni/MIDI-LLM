@@ -1,96 +1,138 @@
-#!/usr/bin/env python3
 """
-External script to calculate the Frechet Audio Distance (FAD) 
-between a reference dataset (Real Music) and a generated dataset (AI Music).
-Requirements: pip install fadtk
+Calculate Frechet Audio Distance (FAD)
+Compares two directories of audio files (e.g., MP3/WAV) to evaluate generation quality.
 """
 
-import argparse
-import subprocess
+import os
 import sys
-import tempfile
-import shutil
+import argparse
+import threading
+import itertools
+import time
 from pathlib import Path
 
+#START PATCH TO FIX PYTORCH HUB BUG (VGGish)
+import torch
+_original_hub_load = torch.hub.load
+
+def _patched_hub_load(repo_or_dir, model, *args, **kwargs):
+    # Force PyTorch Hub to use the 'master' branch for torchvggish
+    # to avoid the "Found default branches ['master', 'main']" error
+    if repo_or_dir == 'harritaylor/torchvggish':
+        repo_or_dir = 'harritaylor/torchvggish:master' 
+    return _original_hub_load(repo_or_dir, model, *args, **kwargs)
+
+torch.hub.load = _patched_hub_load
+#END PATCH
+
+try:
+    from frechet_audio_distance import FrechetAudioDistance
+except ImportError:
+    print("Error: frechet_audio_distance library not found.")
+    print("Install it using: pip install frechet_audio_distance")
+    sys.exit(1)
+
+#LOADING ANIMATION CLASS
+class ProgressSpinner:
+    """A context manager class that provides a background loading animation."""
+    def __init__(self, message="Calculating Frechet Audio Distance..."):
+        # Use Braille characters to create a modern, smooth spinner effect
+        self.spinner = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+        self.delay = 0.1
+        self.busy = False
+        self.message = message
+        self.thread = None
+
+    def spinner_task(self):
+        while self.busy:
+            sys.stdout.write(f"\r{self.message} {next(self.spinner)}")
+            sys.stdout.flush()
+            time.sleep(self.delay)
+
+    def __enter__(self):
+        self.busy = True
+        self.thread = threading.Thread(target=self.spinner_task)
+        self.thread.start()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.busy = False
+        if self.thread:
+            self.thread.join()
+        # Clear the terminal line and print the completion status
+        sys.stdout.write(f"\r{self.message} Completed!       \n")
+        sys.stdout.flush()
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Calculate FAD score between real and generated audio.")
-    parser.add_argument("--reference", type=str, required=True, help="Path to the directory with REAL reference audio")
-    parser.add_argument("--generated", type=str, required=True, help="Path to the directory with GENERATED AI audio")
-    
-    parser.add_argument(
-        "--model", 
-        type=str, 
-        default="clap-2023", 
-        help="Embedding model to use (default: clap-2023. Other valid options: vggish, encodec-emb, wavlm-base)"
+    # 1. Command Line Interface configuration
+    parser = argparse.ArgumentParser(
+        description="Calculate FAD between two directories of audio files (e.g., MP3/WAV).",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog="""
+Usage example:
+  python evaluate_fad.py --ref_dir ./real_music --eval_dir ./generated_music
+        """
     )
     
+    parser.add_argument(
+        "--ref_dir", 
+        type=str, 
+        required=True, 
+        help="Path to the directory containing reference audio files (real background)."
+    )
+    
+    parser.add_argument(
+        "--eval_dir", 
+        type=str, 
+        required=True, 
+        help="Path to the directory containing audio files to evaluate (AI generated)."
+    )
+
     args = parser.parse_args()
 
-    ref_dir = Path(args.reference)
-    gen_dir = Path(args.generated)
+    # 2. Path validation
+    ref_path = Path(args.ref_dir)
+    eval_path = Path(args.eval_dir)
 
-    # Basic directory validation
-    if not ref_dir.exists() or not gen_dir.exists():
-        print("ERROR: One or both directories do not exist. Please check your paths.")
+    if not ref_path.exists() or not ref_path.is_dir():
+        print(f"Error: The reference directory '{ref_path}' does not exist or is not a valid directory.")
         sys.exit(1)
 
-    # --- AUTO-FILTERING MAGIC ---
-    # Cerca tutti i file .mp3 ricorsivamente all'interno della cartella generata
-    mp3_files = list(gen_dir.rglob("*.mp3"))
-    
-    if not mp3_files:
-        print(f"ERROR: No .mp3 files found in {gen_dir} or its subdirectories.")
+    if not eval_path.exists() or not eval_path.is_dir():
+        print(f"Error: The evaluation directory '{eval_path}' does not exist or is not a valid directory.")
         sys.exit(1)
 
-    print("-" * 60)
-    print("STARTING FRECHET AUDIO DISTANCE (FAD) CALCULATION")
-    print("-" * 60)
-    print(f"Reference Folder : {ref_dir.absolute()}")
-    print(f"Generated Folder : {gen_dir.absolute()} (Found {len(mp3_files)} audio files)")
-    print(f"Embedding Model  : {args.model}")
-    print("Preparing audio files... This may take a few minutes.")
-    print("-" * 60)
+    # 3. FAD Model Initialization
+    print("\nInitializing VGGish model for FAD calculation...")
+    try:
+        # Note: using standard frechet_audio_distance parameters for VGGish
+        frechet = FrechetAudioDistance(
+            model_name="vggish",
+            use_pca=False, 
+            use_activation=False,
+            verbose=False
+        )
+    except Exception as e:
+        print(f"Error during FAD model initialization: {e}")
+        sys.exit(1)
 
-    # Crea una cartella temporanea sicura che si autodistruggerà alla fine
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_audio_dir = Path(temp_dir)
+    # 4. Frechet Audio Distance Calculation
+    print(f"\n Reference: {ref_path.absolute()}")
+    print(f" Evaluation: {eval_path.absolute()}")
+    print("(This operation may take a few minutes depending on the number of files and your GPU...)\n")
+
+    try:
+        # Use the spinner context manager to provide visual feedback during the blocking FAD computation
+        with ProgressSpinner():
+            fad_score = frechet.score(str(ref_path), str(eval_path))
+            
+        print(f"\n{'='*50}")
+        print(f" FAD SCORE RESULT: {fad_score:.4f}")
+        print(f"{'='*50}\n")
         
-        # Copia tutti gli MP3 nella cartella temporanea rinominandoli per evitare sovrascritture
-        for f in mp3_files:
-            # Crea un nome univoco unendo il nome della cartella padre e del file (es: prompt_1_gen_1.mp3)
-            safe_filename = f"{f.parent.name}_{f.name}"
-            shutil.copy2(f, temp_audio_dir / safe_filename)
-
-        try:
-            # Construct and execute the fadtk command puntando alla cartella temporanea!
-            cmd = ["fadtk", args.model, str(ref_dir), str(temp_audio_dir)]
-            
-            # Run the subprocess and capture output
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            
-            # Output the result to terminal
-            print("\nCALCULATION COMPLETE")
-            print("FAD Output:")
-            print(result.stdout)
-            
-            # Save results to a report file inside the original generated folder
-            report_path = gen_dir / "REPORT_FAD.txt"
-            with open(report_path, "w") as f:
-                f.write("Frechet Audio Distance (FAD) Report\n")
-                f.write("=" * 40 + "\n")
-                f.write(f"Reference Dataset: {ref_dir.name}\n")
-                f.write(f"Embedding Model: {args.model}\n")
-                f.write(f"Number of AI tracks analyzed: {len(mp3_files)}\n")
-                f.write("-" * 40 + "\n")
-                f.write(result.stdout)
-                
-            print(f"\nReport successfully saved to: {report_path}")
-            
-        except subprocess.CalledProcessError as e:
-            print("\nERROR: fadtk execution failed.")
-            print(e.stderr)
-        except FileNotFoundError:
-            print("\nERROR: 'fadtk' command not found. Please ensure it is installed (pip install fadtk).")
+    except Exception as e:
+        print(f"\nUnexpected error during FAD calculation: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

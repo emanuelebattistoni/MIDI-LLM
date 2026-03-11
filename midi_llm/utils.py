@@ -3,38 +3,38 @@ Utility functions for MIDI-LLM.
 
 This module contains helper functions for audio synthesis, MIDI conversion,
 and other supporting operations. Users can safely skip this file when learning
-the codebase - start with generate_vllm.py or train.py instead.
+the codebase - start with generate_transformers.py or train_lora.py instead.
 """
 
 import os
 import sys
+import subprocess
 from pathlib import Path
 from typing import List, Optional, Union
 
 import torch
 
-# Core dependency - required
+# Core dependency for MIDI token conversion
 try:
-    from anticipation.convert import events_to_midi #Il programma prova ad importare la funzione event_to_midi che trasforma i numeri
-    #generati dall'AI in uno spartito MIDI leggibile
+    # Converts AI-generated token sequences back into readable MIDI objects
+    from anticipation.convert import events_to_midi 
 except ImportError:
-    print("Error: anticipation package not found. Please install it for MIDI conversion.")
-    print("Install with: pip install anticipation") #Dice all'utente di installare la libreria anticipation
+    print("Error: 'anticipation' package not found. MIDI conversion will fail.")
+    print("Please install it using: pip install anticipation")
     sys.exit(1)
 
-# Optional dependencies for audio synthesis
+# Optional dependencies for high-quality audio synthesis
 SYNTHESIS_AVAILABLE = False
 LOUDNESS_NORM_AVAILABLE = False
 try:
-    import midi2audio   #per interfacciarsi con il fluidsynth
-    import librosa      #per manipolare file audio
-    import librosa.effects  
-    import soundfile as sf  #per manipolare file oudio
+    import librosa         # Audio analysis and processing
+    import librosa.effects 
+    import soundfile as sf  # Audio file writing
     SYNTHESIS_AVAILABLE = True
     
-    # Optional loudness normalization
+    # Optional library for LUFS loudness normalization
     try:
-        import pyloudnorm as pyln   #per la normalizzazione del volume        
+        import pyloudnorm as pyln       
         LOUDNESS_NORM_AVAILABLE = True
     except ImportError:
         pass
@@ -46,14 +46,12 @@ except ImportError:
 # Constants
 # ============================================================================
 
-AMT_GPT2_BOS_ID = 55026     #midi tokens
-LLAMA_VOCAB_SIZE = 128256   #LLM tokens   
-LLAMA_MODEL_NAME = "meta-llama/Llama-3.2-1B"    #nome del modello
+AMT_GPT2_BOS_ID = 55026      # Beginning of Sequence ID for MIDI tokens
+LLAMA_VOCAB_SIZE = 128256    # Standard Llama 3.2 vocabulary offset
+LLAMA_MODEL_NAME = "meta-llama/Llama-3.2-1B"
 
-# MIDI tokens are in the extended vocabulary range
+# MIDI tokens are stored in the extended vocabulary range above standard text tokens
 ALLOWED_TOKEN_IDS = list(range(LLAMA_VOCAB_SIZE, LLAMA_VOCAB_SIZE + AMT_GPT2_BOS_ID))
-"""Crea una lista di sicurezza, in modo che l'ia possa scegliere soltanto i token presenti in questo range e divisi in token testuale e
-MIDI token"""
 
 
 # ============================================================================
@@ -61,35 +59,34 @@ MIDI token"""
 # ============================================================================
 
 def has_excessive_notes_at_any_time(
-    tokens: Union[torch.Tensor, List[int]], #prende in input o tensori o liste
-    max_notes_per_time: int = 64    #impostato a 64 perchè raramente un orchestra suona più di 40-50 note nello stesso identico istante
+    tokens: Union[torch.Tensor, List[int]], 
+    max_notes_per_time: int = 64
 ) -> bool:
     """
-    Check if generated MIDI has excessive simultaneous notes at any time point.
+    Check if the generated MIDI contains an unrealistic number of simultaneous notes.
     
-    This validation helps filter out invalid or unrealistic generations that have
-    too many notes playing at once, which can indicate a failure mode.
+    This validation filters out 'hallucinated' sequences where the model generates
+    excessive polyphony, which is often a sign of generation failure.
     
     Args:
-        tokens: Token sequence (torch.Tensor or list of ints)
-        max_notes_per_time: Maximum allowed notes at any single time point
+        tokens: Sequence of token IDs (Tensor or List)
+        max_notes_per_time: Threshold for maximum simultaneous notes (default: 64)
         
     Returns:
-        True if excessive notes detected, False otherwise
+        True if the sequence exceeds the threshold, False otherwise.
     """
-    # Convert to tensor if needed
+    # Normalize input to a PyTorch tensor
     if isinstance(tokens, list):
-        tokens = torch.tensor(tokens)  # normalizza i dati a tensori
+        tokens = torch.tensor(tokens)
     
-    # Extract time tokens (every 3rd token in the sequence: time, duration, note)
-    times = tokens[::3] #estrae solo i token del tempo
+    # Extract 'onset time' tokens (AMT format uses triplets: time, duration, pitch)
+    times = tokens[::3]
     
-    # Use torch.bincount for efficient counting
-    # bincount returns counts for indices 0 to max_value
-    counts = torch.bincount(times)  #Conta il numero suonato di note al secondo.
+    # Efficiently count occurrences of each time index using bincount
+    counts = torch.bincount(times)
     
-    # Check if any time has more than max_notes_per_time notes
-    return torch.any(counts > max_notes_per_time).item()    #controlla ogni istante temporale
+    # Identify if any specific time point exceeds the polyphony limit
+    return torch.any(counts > max_notes_per_time).item()
 
 
 # ============================================================================
@@ -97,97 +94,94 @@ def has_excessive_notes_at_any_time(
 # ============================================================================
 
 def synthesize_midi_to_audio(
-   #prende in input 
-    midi_path: str,   #path del midi  
-    soundfont_path: str,   #path del soundfont 
-    save_mp3: bool = True, #se il file deve essere convertito in mp3 
-    samplerate: Optional[int] = None,  #il samplerate se presente 
-    target_loudness: float = -18.0     #il target di loudness del brano 
+    midi_path: str,
+    soundfont_path: str,
+    save_mp3: bool = True,
+    samplerate: Optional[int] = None,
+    target_loudness: float = -18.0
 ) -> bool:
     """
-    Synthesize MIDI file to audio (WAV/MP3) using FluidSynth with loudness normalization.
+    Synthesize MIDI to audio (WAV/MP3) using FluidSynth with loudness normalization.
     
     Args:
-        midi_path: Path to MIDI file
-        soundfont_path: Path to SoundFont (.sf2) file
-        save_mp3: If True, convert to MP3 and delete WAV
-        samplerate: Optional sample rate for audio
-        target_loudness: Target loudness in LUFS (default: -14.0, Spotify standard)
+        midi_path: Path to the source MIDI file.
+        soundfont_path: Path to the .sf2 SoundFont file.
+        save_mp3: If True, encodes to MP3 and removes the intermediate WAV.
+        samplerate: Audio sampling rate (default: 44100).
+        target_loudness: Target Integrated Loudness in LUFS.
         
     Returns:
-        True if successful, False otherwise
+        True if synthesis and processing were successful.
     """
     if not SYNTHESIS_AVAILABLE:
-        print("Warning: Audio synthesis libraries not available. Skipping synthesis.")
-        print("Install with: conda install conda-forge::fluidsynth conda-forge::ffmpeg")
-        print("              pip install midi2audio librosa soundfile pyloudnorm")
+        print("Warning: Audio synthesis libraries missing. Skipping audio generation.")
+        print("System requirements: fluidsynth, ffmpeg")
+        print("Python requirements: librosa, soundfile, pyloudnorm")
         return False
     
     try:
-        wav_path = midi_path.replace(".mid", ".wav")    #copia il nome del file cambiando da .mid a .wav
-        
-        import subprocess # Lo aggiungiamo per assicurarci che possa lanciare i comandi
-        
-        # Calcola il sample rate
+        wav_path = midi_path.replace(".mid", ".wav")
         sr_val = str(samplerate) if samplerate is not None else "44100"
         
-        # Costruisce il comando aggirando il bug di FluidSynth 2.5+(Se metti -F (l'ordine di salvare su file) dopo i nomi dei file, FluidSynth pensa che -F sia un altro file musicale da suonare.)
-        # (Le opzioni -ni, -r, -F DEVONO stare prima dei file)
+        # FluidSynth Command Construction:
+        # Note: In FluidSynth 2.5+, the -F (file output) flag and SoundFont path 
+        # must precede the MIDI file to avoid parsing errors.
         cmd = [
             "fluidsynth", 
-            "-ni",             #non interactive 
-            "-r", sr_val,      #usa ilsample rate dato 
-            "-F", wav_path,    #rendering veloce su file  
-            soundfont_path,     
+            "-ni",                # Non-interactive mode
+            "-r", sr_val,         # Set audio sample rate
+            "-F", wav_path,       # Render output directly to WAV file
+            soundfont_path,      
             midi_path
         ]
         
-        # Lancia il comando in modo invisibile senza stampare scritte inutili
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  #abbiamo bypassato la libreria 
+        # Execute synthesis silently via subprocess
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-        # Load and trim silence from audio
-        wav, sr = librosa.load(wav_path)    #Utilizza la libreria librosa per avere il wav ed il sr
-        wav, _ = librosa.effects.trim(wav, top_db=30)   #Taglia via il silenzio all'inizio e alla fine del bra grazie a top_db=30
+        # Load audio and perform aggressive silence trimming (-30dB threshold)
+        wav, sr = librosa.load(wav_path, sr=int(sr_val))
+        wav, _ = librosa.effects.trim(wav, top_db=30)
         
-        # Apply loudness normalization
+        # Apply LUFS Loudness Normalization
         if LOUDNESS_NORM_AVAILABLE:
             try:
-                # Measure the loudness
-                meter = pyln.Meter(sr)  #crea un fonometro virtuale basato sul sr
-                loudness = meter.integrated_loudness(wav)   #analizza il brano misurando il volume medio 
+                meter = pyln.Meter(sr)  # Initialize virtual loudness meter
+                loudness = meter.integrated_loudness(wav)
                 
-                # Normalize to target loudness
-                wav = pyln.normalize.loudness(wav, loudness, target_loudness)# Alza o abbassa il volume portandolo alla target loudness
+                # Adjust volume to match the target loudness profile
+                wav = pyln.normalize.loudness(wav, loudness, target_loudness)
                 
-                # Prevent clipping, , questa riga scala verso il basso l'intero brano quel tanto che basta per far rientrare
-                # il picco più alto esattamente a 1.0
+                # Peak Normalization: Prevent digital clipping by scaling the signal
+                # so the absolute peak resides exactly at 1.0 (0 dBFS).
                 if wav.max() > 1.0 or wav.min() < -1.0:
                     wav = wav / max(abs(wav.max()), abs(wav.min()))
             except Exception as e:
                 print(f"Warning: Loudness normalization failed: {e}")
         
-        # Write normalized audio
+        # Save the finalized WAV file
         sf.write(wav_path, wav, sr)
         
         if save_mp3:
-            # Convert WAV to MP3 using ffmpeg, ffmpeg è un software esterno per gestire audio e video
-            mp3_path = midi_path.replace(".mid", ".mp3")    #prende il nome del file originale e ne cambia l'estensione
-            if samplerate is None:
-                cmd = f"ffmpeg -i {wav_path} -codec:a libmp3lame -qscale:a 2 {mp3_path} -y >/dev/null 2>&1"
-                """prende come input il wav masterizzato, usa l'encoder lame, imposta la qualità a 2 (190-250 kbps), se il file esiste 
-                già lo sovrascrive senza chiedere il permesso,>/dev/null 2>&1 Impedisce a FFmpeg di riempire il tuo terminale di scritte tecniche""" 
-            else:
-                cmd = f"ffmpeg -i {wav_path} -codec:a libmp3lame -qscale:a 2 -ar {samplerate} {mp3_path} -y >/dev/null 2>&1"
-                #se è stato specificato un sr forza FFmpeg ad usare quella definizione sonora nella conversione finale    
-            os.system(cmd)  #Invia il comando che abbiamo costruito sopra al sistema operativo
+            # Convert WAV to MP3 using FFmpeg with high-quality LAME encoding
+            mp3_path = midi_path.replace(".mid", ".mp3")
             
-            # Remove WAV file
+            # -qscale:a 2 provides a variable bitrate (~190-250 kbps)
+            # >/dev/null 2>&1 silences technical FFmpeg logs
+            ffmpeg_base = f"ffmpeg -i {wav_path} -codec:a libmp3lame -qscale:a 2"
+            if samplerate:
+                cmd = f"{ffmpeg_base} -ar {samplerate} {mp3_path} -y >/dev/null 2>&1"
+            else:
+                cmd = f"{ffmpeg_base} {mp3_path} -y >/dev/null 2>&1"
+                
+            os.system(cmd)
+            
+            # Clean up temporary WAV file
             if os.path.exists(wav_path):
-                os.remove(wav_path) #Rimuove il wav originale dato che è stato compresso in mp3
+                os.remove(wav_path)
         
         return True
     
-    except Exception as e:  #gestisce un eventuale errore
+    except Exception as e:
         print(f"Error synthesizing MIDI to audio: {e}")
         return False
 
@@ -197,64 +191,63 @@ def synthesize_midi_to_audio(
 # ============================================================================
 
 def save_generation(
-   #prende in input 
-    tokens: List[int], #una lista di tokens midi 
-    prompt: str,       #il prompt inserito 
-    output_dir: Path,  #il path della directory di output    
-    generation_idx: int,   #indice della generazione 
-    soundfont_path: Optional[str] = None,  # il path del soundfont 
-    synthesize: bool = False, #imposta di default syntesize a False  
-    validate: bool = True  #imposta di default validate a True 
+    tokens: List[int], 
+    prompt: str, 
+    output_dir: Path, 
+    generation_idx: int, 
+    soundfont_path: Optional[str] = None, 
+    synthesize: bool = False, 
+    validate: bool = True 
 ) -> bool:
     """
-    Save generated tokens as MIDI file (and optionally audio).
+    Save generated token sequences as MIDI files and optional audio renders.
     
     Args:
-        tokens: List of generated token IDs (already shifted from LLAMA vocab)
-        prompt: Original text prompt
-        output_dir: Directory to save outputs
-        generation_idx: Index of this generation (for multiple outputs)
-        soundfont_path: Path to SoundFont file for synthesis
-        synthesize: Whether to synthesize to audio
-        validate: Whether to validate tokens before saving (checks for excessive notes)
+        tokens: MIDI token IDs (integer list).
+        prompt: The input text description.
+        output_dir: Destination folder path.
+        generation_idx: Sequential ID for the generation.
+        soundfont_path: Path to the .sf2 instrument file.
+        synthesize: If True, triggers audio synthesis.
+        validate: If True, performs polyphony safety checks.
         
     Returns:
-        True if successful, False otherwise
+        True if all files were successfully saved.
     """
     try:
-        # Validate tokens before saving
+        # Perform structural validation
         if validate:
-            if has_excessive_notes_at_any_time(tokens, max_notes_per_time=64):#controlla se ci sono più di 64 note contemporaneamente
-                print(f"  ✗ Generation {generation_idx}: Failed validation (excessive simultaneous notes)")
+            if has_excessive_notes_at_any_time(tokens, max_notes_per_time=64):
+                print(f"  ✗ Generation {generation_idx}: Failed validation (excessive polyphony)")
                 return False
         
-        # Create output directory
+        # Create destination directory tree
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Save prompt text
+        # Metadata Persistence: Save the original prompt for reference
         prompt_file = output_dir / "prompt.txt"
         with open(prompt_file, "w") as f:
             f.write(prompt)
         
-        # Save token sequence
+        # Debugging Persistence: Save the raw token IDs
         tokens_file = output_dir / f"gen_{generation_idx}_tokens.txt"
         with open(tokens_file, "w") as f:
             for token in tokens:
                 f.write(f"{token}\n")
         
-        # Convert tokens to MIDI
-        midi_obj = events_to_midi(tokens)   #funzione che traduce i tokens generati in midi
-        midi_file = output_dir / f"gen_{generation_idx}.mid"    #viene creato il nome del file .mid
-        midi_obj.save(str(midi_file))       #viene salvato effettivamente il file
+        # MIDI Conversion: Translate numerical tokens into a standard MIDI object
+        midi_obj = events_to_midi(tokens)
+        midi_file = output_dir / f"gen_{generation_idx}.mid"
+        midi_obj.save(str(midi_file))
         
         print(f"  ✓ Saved MIDI: {midi_file}")
         
-        # Optionally synthesize to audio
-        if synthesize and soundfont_path:   #se presente l'opzione synthesize ed un soundfont
+        # Optional Audio Synthesis Pipeline
+        if synthesize and soundfont_path:
             success = synthesize_midi_to_audio(
-                str(midi_file), #passa il midi generato
-                soundfont_path,#passa il soundfont
-                save_mp3=True   #richiede la compressione in mp3
+                str(midi_file),
+                soundfont_path,
+                save_mp3=True
             )
             if success:
                 print(f"  ✓ Synthesized audio: {midi_file.with_suffix('.mp3')}")
