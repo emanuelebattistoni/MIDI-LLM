@@ -222,6 +222,8 @@ maestro-v3.0.0-midi.zip
 *.mp3
 *.wav
 *.mideval_results/
+groove-midi-dataset
+groove_sft_dataset_hf.jsonl
 #evaluation set
 eval_results/
 maestro_prompts_list.txt

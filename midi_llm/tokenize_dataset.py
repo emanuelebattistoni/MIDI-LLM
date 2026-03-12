@@ -1,97 +1,130 @@
+"""
+Groove MIDI Dataset → groove_sft_dataset_hf.jsonl
+Pre-tokenized format compatible with MIDI-LLM (slseanwu/MIDI-LLM_Llama-3.2-1B)
+"""
+
 import json
-import tempfile
 import os
-from transformers import AutoTokenizer
-from datasets import load_dataset
+import tempfile
+import csv
+from pathlib import Path
 from anticipation.convert import midi_to_events
+from transformers import AutoTokenizer
+
+# ==========================================
+# MIDI-LLM CONSTANTS
+# ==========================================
+SYSTEM_PROMPT = "You are a world-class composer. Please compose some music according to the following description: "
+
+LLAMA_MODEL_NAME = "slseanwu/MIDI-LLM_Llama-3.2-1B"
+LLAMA_VOCAB_SIZE = 128256
+AMT_GPT2_BOS_ID = 55026
+
+OUTPUT_JSONL = "./data/groove_sft_dataset_hf.jsonl"
+LOCAL_MIDI_ROOT = Path("./data/groove-midi-dataset")
+SPLITS_TO_USE = {"train"} 
+
+
+def build_text_prompt(row: dict) -> str:
+    """Builds the text prompt from CSV metadata."""
+    style = row["style"].replace("/", " ").replace("-", " ").strip()
+    beat_type = "drum fill" if row["beat_type"] == "fill" else "drum beat"
+    bpm = row["bpm"]
+    time_sig = row["time_signature"].replace("-", "/")
+    drummer = row["drummer"]
+
+    return f"A {style} {beat_type} played in {time_sig} time at {bpm} BPM by {drummer}."
+
+
+def get_midi_bytes(midi_filename: str) -> bytes | None:
+    """Reads the MIDI file from local storage, returns bytes."""
+    local_path = LOCAL_MIDI_ROOT / midi_filename
+    if local_path.exists():
+        return local_path.read_bytes()
+    else:
+        print(f"  [!] File not found locally: {local_path}")
+        return None
+
+
+def tokenize_midi_bytes(midi_bytes: bytes) -> list | None:
+    """Converts MIDI bytes directly into a list of integers (AMT tokens)."""
+    with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as tmp:
+        tmp.write(midi_bytes)
+        tmp_path = tmp.name
+    try:
+        amt_tokens = midi_to_events(tmp_path)
+        return amt_tokens
+    except Exception as e:
+        print(f"  [!] AMT tokenization error: {e}")
+        return None
+    finally:
+        os.unlink(tmp_path)
+
 
 def main():
-    # Output file path for the fine-tuning dataset
-    OUTPUT_JSONL = "groove_sft_dataset_hf.jsonl"
+    print(f"Loading Llama 3 Tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(LLAMA_MODEL_NAME)
     
-    # 1. Initialize Llama 3.2 1B Tokenizer
-    print("Loading Llama 3.2 1B Tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained("slseanwu/MIDI-LLM_Llama-3.2-1B")
-    
-    # 2. Download and load the Groove MIDI dataset from Hugging Face Hub
-    print("Downloading/Loading Groove MIDI dataset from Hugging Face...")
-    # This command downloads the dataset on the first execution and utilizes 
-    # the local cache for subsequent runs.
-    dataset = load_dataset("schismaudio/groove-midi-dataset")
-    
-    processed_files = 0
-    failed_files = 0
+    csv_path = LOCAL_MIDI_ROOT / "info.csv"
+    print(f"Reading local info.csv from {csv_path}...")
+    with open(csv_path, encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
 
-    print("Processing online dataset and tokenizing MIDI files...")
+    rows = [r for r in rows if r["split"] in SPLITS_TO_USE]
+    print(f"Rows to process (split={SPLITS_TO_USE}): {len(rows)}")
 
-    # Open the output file in write mode for streaming
+    processed = 0
+    failed = 0
+
+    # Create parent directories if they don't exist
+    Path(OUTPUT_JSONL).parent.mkdir(parents=True, exist_ok=True)
+
     with open(OUTPUT_JSONL, "w", encoding="utf-8") as f_out:
-        
-        # Iterate through available dataset splits (e.g., train, validation, test)
-        for split in dataset.keys():
-            print(f"Processing split: {split}...")
-            
-            for row in dataset[split]:
-                # 3. Metadata extraction for text prompt construction
-                style = str(row.get("style", "drum")).replace('/', ' and ').strip()
-                beat_type = "drum fill" if row.get("beat_type") == 'fill' else "drum beat"
-                bpm = str(row.get("bpm", "120")).strip()
-                time_sig = str(row.get("time_signature", "4-4")).strip()
-                
-                text_prompt = f"A {style} {beat_type} played in {time_sig} time at {bpm} BPM."
-                
-                # 4. Safe MIDI file extraction
-                # Hugging Face provides MIDI data either as raw bytes or cached file paths.
-                # To ensure compatibility with the AMT library (which requires a file path),
-                # we write bytes to a temporary file, process it, and delete it immediately after.
-                try:
-                    # Create a secure temporary file
-                    with tempfile.NamedTemporaryFile(suffix=".mid", delete=False) as temp_midi:
-                        temp_midi_path = temp_midi.name
-                        
-                        # Handle cases where MIDI is provided as raw bytes within a dictionary
-                        if "midi" in row and isinstance(row["midi"], dict) and "bytes" in row["midi"]:
-                            temp_midi.write(row["midi"]["bytes"])
-                        else:
-                            # Fallback to direct file path if provided by the dataset structure
-                            temp_midi_path = row.get("midi_filename", temp_midi_path)
-                    
-                    # Perform AMT (Anticipatory Music Transformer) tokenization
-                    amt_tokens = midi_to_events(temp_midi_path)
-                    midi_string = " ".join([str(token) for token in amt_tokens])
-                    
-                except Exception as e:
-                    print(f"Error processing MIDI structure: {e}")
-                    failed_files += 1
-                    continue
-                finally:
-                    # Cleanup: Remove the temporary file if it was created during this iteration
-                    if os.path.exists(temp_midi_path) and temp_midi_path.startswith(tempfile.gettempdir()):
-                        os.remove(temp_midi_path)
-                
-                # 5. Build conversation structure for Llama 3
-                conversation = [
-                    {"role": "user", "content": text_prompt},
-                    {"role": "assistant", "content": midi_string}
-                ]
-                
-                # 6. Apply Llama 3 chat template for instruction fine-tuning
-                final_text = tokenizer.apply_chat_template(conversation, tokenize=False)
-                
-                # 7. Write processed sample to JSONL file
-                item = {"text": final_text}
-                f_out.write(json.dumps(item) + "\n")
-                
-                processed_files += 1
-                if processed_files % 100 == 0:
-                    print(f"Tokenized {processed_files} files from Hugging Face...")
+        for i, row in enumerate(rows):
+            midi_filename = row["midi_filename"]
+            prompt_text = build_text_prompt(row)
 
-    # Final execution report
+            if (i + 1) % 50 == 0:
+                print(f"  [{i+1}/{len(rows)}] {midi_filename}")
+
+            # 1. Get raw MIDI tokens
+            midi_bytes = get_midi_bytes(midi_filename)
+            if midi_bytes is None:
+                failed += 1
+                continue
+
+            amt_tokens = tokenize_midi_bytes(midi_bytes)
+            if amt_tokens is None:
+                failed += 1
+                continue
+
+            full_text_prompt = SYSTEM_PROMPT + prompt_text + " "
+            
+            # A. Transform the text into standard Llama 3 tokens
+            text_input_ids = tokenizer(full_text_prompt, add_special_tokens=True)["input_ids"]
+            
+            # B. Create the special MIDI_BOS token (offset 128256)
+            midi_bos_id = [AMT_GPT2_BOS_ID + LLAMA_VOCAB_SIZE]
+            
+            # C. Transform the AMT numbers into the model's extended tokens (offset 128256)
+            midi_input_ids = [t + LLAMA_VOCAB_SIZE for t in amt_tokens]
+            
+            # D. Merge everything into a single, perfect mathematical sequence
+            final_input_ids = text_input_ids + midi_bos_id + midi_input_ids
+
+            # Save the JSON with input_ids and labels, ready for the SFTTrainer
+            item = {
+                "input_ids": final_input_ids,
+                "labels": final_input_ids # In Causal LM, labels are identical to input_ids
+            }
+            
+            f_out.write(json.dumps(item) + "\n")
+            processed += 1
+
     print(f"\n--- COMPLETED ---")
-    print(f"MIDI files successfully tokenized from cloud: {processed_files}")
-    if failed_files > 0:
-        print(f"Skipped files: {failed_files}")
-    print(f"Dataset saved to: {os.path.abspath(OUTPUT_JSONL)}")
+    print(f"Examples written:  {processed}")
+    print(f"Examples skipped:  {failed}")
+    print(f"Dataset saved to:  {os.path.abspath(OUTPUT_JSONL)}")
 
 if __name__ == "__main__":
     main()

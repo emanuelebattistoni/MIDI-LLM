@@ -29,7 +29,7 @@ def init_clap():
         old_stdout = sys.stdout
         sys.stdout = open(os.devnull, 'w')
         try:
-            _clap_model_instance = laion_clap.CLAP_Module(enable_fusion=False)
+            _clap_model_instance = laion_clap.CLAP_Module(enable_fusion=True)
             _clap_model_instance.load_ckpt()
         finally:
             sys.stdout.close()
