@@ -33,7 +33,7 @@ def main():
     parser = argparse.ArgumentParser(description="MIDI Dataset Extractor and MP3 Synthesizer")
     
     parser.add_argument("--limit", type=int, default=500, help="Exact number of MP3 files to generate")
-    parser.add_argument("--output_dir", type=str, default="./data/maestro_eval_set", help="Path to the output directory")
+    parser.add_argument("--output_dir", type=str, default="./data/maestro_reference_dataset", help="Path to the output directory")
     parser.add_argument("--data_dir", type=str, default="./data", help="Directory to save the downloaded dataset archive")
     parser.add_argument("--dataset_url", type=str, default="https://storage.googleapis.com/magentadata/datasets/maestro/v3.0.0/maestro-v3.0.0-midi.zip", help="URL of the dataset ZIP file")
     parser.add_argument("--soundfont", type=str, default="./soundfonts/FluidR3_GM/FluidR3_GM.sf2", help="Path to the SoundFont (.sf2) file")

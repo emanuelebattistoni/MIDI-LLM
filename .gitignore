@@ -214,17 +214,22 @@ test_outputs/
 #reference data
 data/groove_reference_dataset/
 generated_outputs/
-groove_eval_set
-prompts.txt
+maestro_reference_dataset
 audio_trim
+maestro_reference_final
+groove_reference_final
+maestro-v3.0.0-midi.zip
 *.mp3
 *.wav
 *.mideval_results/
-
 #evaluation set
 eval_results/
 maestro_prompts_list.txt
-maestro-v3.0.0-midi.zip
+prompts.txt
+groove_eval_results
+groove_eval_set
 maestro_eval_results
 maestro_eval_set
+groove_eval_final
+maestro_eval_final
 

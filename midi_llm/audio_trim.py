@@ -1,12 +1,10 @@
 import os
+import argparse
 from pathlib import Path
 from pydub import AudioSegment, effects
 from tqdm import tqdm
-# Set the source and destination paths for the reference and evaluation datasets
-SOURCE_DIR = Path("./data/maestro_eval_set")
-DEST_DIR = Path("./data/maestro_eval_final")
 
-# Processing parameters
+# Processing parameters (kept as constants for consistent standardization)
 MAX_SECONDS = 30  # Maximum length for trimming
 MIN_SECONDS = 29  # Minimum duration threshold for filtering
 TARGET_DBFS = -16.0  # Loudness normalization target
@@ -18,21 +16,44 @@ def main():
     Standardize audio files by filtering duration, converting to mono,
     trimming to a fixed length, and normalizing loudness.
     """
-    if not SOURCE_DIR.exists():
-        print(f"ERROR: Source directory {SOURCE_DIR} does not exist.")
+    # CLI Argument Parsing
+    parser = argparse.ArgumentParser(description="Audio standardization for dataset evaluation.")
+    parser.add_argument(
+        "--source_dir", 
+        type=str, 
+        default="./data/maestro_eval_set", 
+        help="Path to the source directory containing raw audio."
+    )
+    parser.add_argument(
+        "--dest_dir", 
+        type=str, 
+        default="./data/maestro_eval_final", 
+        help="Path to the destination directory for processed audio."
+    )
+    
+    args = parser.parse_args()
+    
+    # Path instantiation
+    source_path = Path(args.source_dir)
+    dest_path = Path(args.dest_dir)
+
+    if not source_path.exists():
+        print(f"ERROR: Source directory {source_path} does not exist.")
         return
 
     # Create destination directory if it doesn't exist
-    DEST_DIR.mkdir(parents=True, exist_ok=True)
+    dest_path.mkdir(parents=True, exist_ok=True)
     
     # Collect all supported audio files
-    audio_files = [f for f in SOURCE_DIR.iterdir() if f.suffix.lower() in ['.mp3', '.wav']]
+    audio_files = [f for f in source_path.iterdir() if f.suffix.lower() in ['.mp3', '.wav']]
     
     if not audio_files:
-        print(f"No audio files found in {SOURCE_DIR}")
+        print(f"No audio files found in {source_path}")
         return
 
-    print(f"Processing: Filtering > {MIN_SECONDS}s | Mono Conversion | Trimming ({MAX_SECONDS}s) | Normalization...")
+    print(f"Processing from: {source_path.absolute()}")
+    print(f"Saving to:       {dest_path.absolute()}")
+    print(f"Filters: > {MIN_SECONDS}s | Mono Conversion | Trimming ({MAX_SECONDS}s) | Normalization...")
 
     skipped_count = 0  # Initialize the counter for discarded files
 
@@ -67,18 +88,19 @@ def main():
             final_audio = normalized.apply_gain(change_in_db)
             
             # 6. Export as WAV
-            output_path = DEST_DIR / f.with_suffix('.wav').name
+            output_path = dest_path / f.with_suffix('.wav').name
             final_audio.export(output_path, format="wav")
             
         except Exception as e:
             print(f"Error processing {f.name}: {e}")
 
     # Summary report
-    print(f"\nTask complete! Dataset ready at: {DEST_DIR.absolute()}")
+    print(f"\nTask complete! Dataset ready at: {dest_path.absolute()}")
     
     if skipped_count > 0:
         print(f"Files discarded (duration < {MIN_SECONDS}s): {skipped_count}")
         print(f"Files successfully processed: {len(audio_files) - skipped_count}")
+
 
 if __name__ == "__main__":
     main()
