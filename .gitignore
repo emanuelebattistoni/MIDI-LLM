@@ -223,7 +223,6 @@ maestro-v3.0.0-midi.zip
 *.wav
 *.mideval_results/
 groove-midi-dataset
-groove_sft_dataset_hf.jsonl
 #evaluation set
 eval_results/
 maestro_prompts_list.txt
@@ -236,7 +235,9 @@ groove_eval_final
 maestro_eval_final
 lora_eval_final
 lora_eval_results
-lora_groove_midi_model
 groove_reference_dataset_augmented
 groove_reference_final_augmented
-
+groove
+lora
+lora2
+maestro

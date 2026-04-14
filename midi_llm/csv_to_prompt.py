@@ -1,5 +1,6 @@
 import csv
 import argparse
+import random
 from pathlib import Path
 
 def main():
@@ -10,7 +11,7 @@ def main():
     parser.add_argument(
         "--csv_path", 
         type=str, 
-        default="/data/groove_info.csv", 
+        default="./data/groove-midi-dataset/info.csv", 
         help="Path to the metadata CSV file"
     )
     

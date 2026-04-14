@@ -398,7 +398,7 @@ Examples:
     parser.add_argument(
         "--lora",  # User label
         type=str,   # Whatever the user types will be treated as a string
-        default="./lora_groove_midi_model",  
+        default="./lora_groove_midi_model2",  
         help="Path to LoRA adapter"
     )
 

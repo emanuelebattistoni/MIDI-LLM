@@ -11,8 +11,8 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, TaskType
 
 MODEL_NAME   = "slseanwu/MIDI-LLM_Llama-3.2-1B"
-DATASET_PATH = "./data/groove_sft_dataset_hf.jsonl"
-OUTPUT_DIR   = "./lora_groove_midi_model"
+DATASET_PATH = "./data/groove_sft_dataset_hf2.jsonl"
+OUTPUT_DIR   = "./lora_groove_midi_model2"
 MAX_LENGTH   = 2048  
 
 def main():

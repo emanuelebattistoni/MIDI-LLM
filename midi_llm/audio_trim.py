@@ -21,13 +21,13 @@ def main():
     parser.add_argument(
         "--source_dir", 
         type=str, 
-        default="./data/maestro_eval_set", 
+        default="./lora2_eval_set", 
         help="Path to the source directory containing raw audio."
     )
     parser.add_argument(
         "--dest_dir", 
         type=str, 
-        default="./data/maestro_eval_final", 
+        default="./data/lora2_eval_final", 
         help="Path to the destination directory for processed audio."
     )
     

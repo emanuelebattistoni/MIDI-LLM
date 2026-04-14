@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 import csv
-import random  # Aggiunto per la diversificazione dei prompt
+import random  
 from pathlib import Path
 from anticipation.convert import midi_to_events
 from transformers import AutoTokenizer
@@ -22,7 +22,7 @@ LLAMA_MODEL_NAME = "slseanwu/MIDI-LLM_Llama-3.2-1B"
 LLAMA_VOCAB_SIZE = 128256
 AMT_GPT2_BOS_ID = 55026
 
-OUTPUT_JSONL = "./data/groove_sft_dataset_hf.jsonl"
+OUTPUT_JSONL = "./data/groove_sft_dataset_hf2.jsonl"
 LOCAL_MIDI_ROOT = Path("./data/groove-midi-dataset")
 SPLITS_TO_USE = {"train"} 
 
