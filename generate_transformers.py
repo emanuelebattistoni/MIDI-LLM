@@ -42,6 +42,7 @@ import mido
 # Import CLAP evaluation module 
 from midi_llm.evaluate_clap import init_clap, evaluate_audio_clap, is_clap_available
 
+from peft import PeftModel
 
 # Standard General MIDI Map
 GM_INSTRUMENTS = {
@@ -152,7 +153,7 @@ DEFAULT_MAX_TOKENS = 2046   # Maximum length of the generated composition
 DEFAULT_N_OUTPUTS = 4       # Give more outputs for variability
 
 # Model Loading
-def prepare_hf_model(model_path: str):
+def prepare_hf_model(model_path: str, lora_path: str = None):
     """
     Initialize HuggingFace model in BFloat16.
     
@@ -176,6 +177,11 @@ def prepare_hf_model(model_path: str):
         dtype=torch.bfloat16,   # DataType of the model parameters
         trust_remote_code=True  # Allow the computer to execute the remote code attached to the model
     ).to(device="cuda")         # Transfers the entire model to the NVIDIA GPU's VRAM
+    
+    if lora_path:
+        print(f"Applicazione adattatori LoRA da: {lora_path}")
+        model = PeftModel.from_pretrained(model, lora_path)
+        model = model.merge_and_unload()
     
     model.eval()    # Switch to inference mode (freezes weights)
     print(f" Model loaded successfully\n")
@@ -388,6 +394,13 @@ Examples:
         default="slseanwu/MIDI-LLM_Llama-3.2-1B",   # Default model
         help="Path to MIDI-LLM model checkpoint, can be HuggingFace model ID or local path (default: slseanwu/MIDI-LLM_Llama-3.2-1B)"
     )
+    
+    parser.add_argument(
+        "--lora",  # User label
+        type=str,   # Whatever the user types will be treated as a string
+        default="./lora_groove_midi_model",  
+        help="Path to LoRA adapter"
+    )
 
     """
     Creates mutual exclusion between command line arguments and a text file. 
@@ -535,7 +548,7 @@ Examples:
     )
 
     # Load model
-    model = prepare_hf_model(model_path=args.model)     # Loads the model using the previously defined function
+    model = prepare_hf_model(model_path=args.model, lora_path=args.lora)     # Loads the model using the previously defined function
     
     if args.synthesize and args.use_clap:
         init_clap()

@@ -234,4 +234,9 @@ maestro_eval_results
 maestro_eval_set
 groove_eval_final
 maestro_eval_final
+lora_eval_final
+lora_eval_results
+lora_groove_midi_model
+groove_reference_dataset_augmented
+groove_reference_final_augmented
 

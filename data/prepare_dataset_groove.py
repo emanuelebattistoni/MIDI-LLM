@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """
-Groove MIDI Dataset Reference Preparer - Robust Version
-- Fixes FluidSynth argument order.
-- Disables ALSA audio drivers to prevent crashes.
-- Ensures strict cleanup of failed tracks.
+Groove MIDI Local Preparer
+- Legge i file MIDI dalla cartella locale groove-midi-results (incluse sottocartelle).
+- Sintetizza in MP3 usando FluidSynth.
 """
 
 import os
 import subprocess
 import sys
 import shutil
+import random
 from pathlib import Path
-from datasets import load_dataset
 import tqdm
 
 def check_dependencies():
-    """Check for system tools."""
+    """Verifica la presenza di fluidsynth e ffmpeg."""
     for tool in ["fluidsynth", "ffmpeg"]:
         if shutil.which(tool) is None:
-            print(f"ERROR: {tool} is not installed. Run: sudo apt install {tool}")
+            print(f"ERROR: {tool} non è installato. Esegui: sudo apt install {tool}")
             sys.exit(1)
 
 def main():
-    # --- CONFIGURATION ---
-    NUM_SAMPLES = 500 
-    # Use absolute path for workspace to avoid 'File not found' errors
+    NUM_SAMPLES = 1000 
     BASE_DIR = Path("/home/emanuelebattistoni/Documents/workspace/MIDI-LLM")
-    OUTPUT_DIR = BASE_DIR / "groove_reference_dataset"
+    
+    SOURCE_DIR = BASE_DIR / "data/groove-midi-dataset" 
+    
+    OUTPUT_DIR = BASE_DIR / "groove_reference_dataset_augmented"
     SOUNDFONT_PATH = BASE_DIR / "soundfonts/FluidR3_GM/FluidR3_GM.sf2"
     
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -34,57 +34,54 @@ def main():
 
     check_dependencies()
 
+    if not SOURCE_DIR.exists():
+        print(f"ERROR: Cartella sorgente non trovata: {SOURCE_DIR}")
+        return
+
     if not SOUNDFONT_PATH.exists():
-        print(f"ERROR: SoundFont not found at: {SOUNDFONT_PATH}")
-        print("Please verify the file exists at that exact path.")
+        print(f"ERROR: SoundFont non trovato a: {SOUNDFONT_PATH}")
         return
 
-    print(f"Loading dataset from Hugging Face...")
-    try:
-        dataset = load_dataset("schismaudio/groove-midi-dataset", split="train")
-        dataset = dataset.select_columns(["midi"])
-    except Exception as e:
-        print(f"ERROR loading dataset: {e}")
+    print(f"Ricerca file MIDI in {SOURCE_DIR}...")
+    all_midi_files = list(SOURCE_DIR.rglob("*.mid"))
+    
+    if not all_midi_files:
+        print("Nessun file .mid trovato nella cartella sorgente.")
         return
 
-    subset = dataset.shuffle(seed=42).select(range(min(NUM_SAMPLES, len(dataset))))
-    print(f"Processing {len(subset)} tracks...")
+    print(f"Trovati {len(all_midi_files)} file MIDI.")
+
+    random.seed(42) # Per riproducibilità
+    if len(all_midi_files) > NUM_SAMPLES:
+        selected_files = random.sample(all_midi_files, NUM_SAMPLES)
+    else:
+        selected_files = all_midi_files
+    
+    print(f"Inizio sintesi di {len(selected_files)} tracce...")
 
     success_count = 0
 
-    for idx, item in enumerate(tqdm.tqdm(subset, desc="Synthesizing")):
-        temp_midi = OUTPUT_DIR / f"temp_{idx}.mid"
+    for idx, midi_path in enumerate(tqdm.tqdm(selected_files, desc="Sintetizzando")):
         temp_wav = OUTPUT_DIR / f"temp_{idx}.wav"
         final_mp3 = OUTPUT_DIR / f"groove_ref_{idx}.mp3"
 
         try:
-            # 1. Save MIDI bytes
-            midi_data = item['midi']
-            midi_bytes = midi_data['bytes'] if isinstance(midi_data, dict) else midi_data
-            
-            with open(temp_midi, "wb") as f:
-                f.write(midi_bytes)
-
-            # 2. Synthesize MIDI to WAV
-            # Correct order: [flags] -> [output] -> [sample rate] -> [soundfont] -> [input]
             synth_cmd = [
                 "fluidsynth", 
                 "-ni",                # No interactive mode
-                "-a", "null",         # Use NULL audio driver (prevents ALSA errors)
-                "-F", str(temp_wav),  # Output file
+                "-a", "null",         # NULL audio driver (per ambienti senza scheda audio)
+                "-F", str(temp_wav),  # File di output WAV
                 "-r", "44100",        # Sample rate
                 str(SOUNDFONT_PATH),  # SoundFont
-                str(temp_midi)        # Input MIDI
+                str(midi_path)        # File MIDI originale
             ]
             
             synth_result = subprocess.run(synth_cmd, capture_output=True, text=True)
 
             if synth_result.returncode != 0:
-                # Print error but do not save anything
-                print(f"\n[SKIP] Track {idx} FluidSynth Error: {synth_result.stderr.strip()}")
+                print(f"\n[SKIP] Errore FluidSynth su {midi_path.name}: {synth_result.stderr.strip()}")
                 continue 
 
-            # 3. Convert WAV to MP3
             ffmpeg_cmd = [
                 "ffmpeg", "-y", "-loglevel", "error",
                 "-i", str(temp_wav), 
@@ -94,25 +91,21 @@ def main():
             ffmpeg_result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
 
             if ffmpeg_result.returncode != 0:
-                print(f"\n[SKIP] Track {idx} FFmpeg Error: {ffmpeg_result.stderr.strip()}")
+                print(f"\n[SKIP] Errore FFmpeg su {midi_path.name}: {ffmpeg_result.stderr.strip()}")
                 continue
 
             success_count += 1
 
         except Exception as e:
-            print(f"\n[ERROR] Unexpected error on Track {idx}: {e}")
-            if final_mp3.exists():
-                final_mp3.unlink()
+            print(f"\n[ERROR] Errore inaspettato su {midi_path.name}: {e}")
         
         finally:
-            # Strict Cleanup: Always delete temp files
-            if temp_midi.exists():
-                temp_midi.unlink()
             if temp_wav.exists():
                 temp_wav.unlink()
 
-    print(f"\nFinished. Successfully created {success_count} MP3 files.")
-    print(f"Reference folder: {OUTPUT_DIR.absolute()}")
+    print(f"\nOperazione completata!")
+    print(f"Creati con successo {success_count} file MP3.")
+    print(f"Cartella di destinazione: {OUTPUT_DIR.absolute()}")
 
 if __name__ == "__main__":
     main()

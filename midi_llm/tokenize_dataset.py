@@ -1,12 +1,14 @@
 """
 Groove MIDI Dataset → groove_sft_dataset_hf.jsonl
 Pre-tokenized format compatible with MIDI-LLM (slseanwu/MIDI-LLM_Llama-3.2-1B)
+DIVERSIFIED VERSION for improved CLAP scores.
 """
 
 import json
 import os
 import tempfile
 import csv
+import random  # Aggiunto per la diversificazione dei prompt
 from pathlib import Path
 from anticipation.convert import midi_to_events
 from transformers import AutoTokenizer
@@ -26,14 +28,26 @@ SPLITS_TO_USE = {"train"}
 
 
 def build_text_prompt(row: dict) -> str:
-    """Builds the text prompt from CSV metadata."""
+    """Builds a DIVERSIFIED text prompt from CSV metadata."""
     style = row["style"].replace("/", " ").replace("-", " ").strip()
     beat_type = "drum fill" if row["beat_type"] == "fill" else "drum beat"
     bpm = row["bpm"]
     time_sig = row["time_signature"].replace("-", "/")
     drummer = row["drummer"]
 
-    return f"A {style} {beat_type} played in {time_sig} time at {bpm} BPM by {drummer}."
+    templates = [
+        f"A {style} {beat_type} played in {time_sig} time at {bpm} BPM by {drummer}.",
+        
+        f"{drummer} performs a {style} {beat_type} with a {time_sig} signature at {bpm} BPM.",
+        
+        f"At {bpm} BPM, this is a {style} {time_sig} rhythm, specifically a {beat_type} by {drummer}.",
+        
+        f"Capture the essence of {style} with this {beat_type} in {time_sig}. Tempo: {bpm} BPM. Played by {drummer}.",
+        
+        f"Compose a {style} {beat_type} in {time_sig}. Use a tempo of {bpm} BPM. Style reference: {drummer}."
+    ]
+    
+    return random.choice(templates)
 
 
 def get_midi_bytes(midi_filename: str) -> bytes | None:
@@ -82,6 +96,7 @@ def main():
     with open(OUTPUT_JSONL, "w", encoding="utf-8") as f_out:
         for i, row in enumerate(rows):
             midi_filename = row["midi_filename"]
+            # Chiamata alla funzione diversificata
             prompt_text = build_text_prompt(row)
 
             if (i + 1) % 50 == 0:
@@ -109,13 +124,13 @@ def main():
             # C. Transform the AMT numbers into the model's extended tokens (offset 128256)
             midi_input_ids = [t + LLAMA_VOCAB_SIZE for t in amt_tokens]
             
-            # D. Merge everything into a single, perfect mathematical sequence
+            # D. Merge everything into a single mathematical sequence
             final_input_ids = text_input_ids + midi_bos_id + midi_input_ids
 
-            # Save the JSON with input_ids and labels, ready for the SFTTrainer
+            # Save the JSON with input_ids and labels
             item = {
                 "input_ids": final_input_ids,
-                "labels": final_input_ids # In Causal LM, labels are identical to input_ids
+                "labels": final_input_ids 
             }
             
             f_out.write(json.dumps(item) + "\n")
