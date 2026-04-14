@@ -19,9 +19,7 @@ def init_clap():
     sys.stdout = open(os.devnull, 'w')
     try:
         import laion_clap
-        # CORREZIONE 1: Rimosso amodel='HTSAT-tiny' e model_id=1
-        # In questo modo la libreria carica di default l'architettura HTSAT-base 
-        # e il checkpoint corretto che include i layer "fusion_model"
+
         _clap_model_instance = laion_clap.CLAP_Module(enable_fusion=True)
         _clap_model_instance.load_ckpt()
     finally:
@@ -60,13 +58,11 @@ def main():
     results = []
     
     for f_path in files:
-        # Trova tutti i txt nella stessa cartella dell'mp3 e li ordina alfabeticamente
         txt_list = sorted(list(f_path.parent.glob("*.txt")))
         prompt_file = None
         
-        # CORREZIONE 2: Prendi esclusivamente il SECONDO file txt
         if len(txt_list) >= 2:
-            prompt_file = txt_list[1] # L'indice 1 corrisponde al secondo elemento
+            prompt_file = txt_list[1] 
         else:
             print(f"[SKIP] {f_path.name}: Non ci sono almeno 2 file .txt in questa cartella.")
             continue

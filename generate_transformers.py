@@ -179,14 +179,26 @@ def prepare_hf_model(model_path: str, lora_path: str = None):
     ).to(device="cuda")         # Transfers the entire model to the NVIDIA GPU's VRAM
     
     if lora_path:
-        print(f"Applicazione adattatori LoRA da: {lora_path}")
-        model = PeftModel.from_pretrained(model, lora_path)
+        print(f"Applicazione e fusione adattatore LoRA al 50% da: {lora_path}")
+        model = PeftModel.from_pretrained(
+            model, 
+            lora_path,
+            adapter_name="lora_100"
+        )
+         
+        model.add_weighted_adapter(
+            adapters=["lora_100"], 
+            weights=[0.3], 
+            adapter_name="lora_30"
+        )
+        model.set_adapter("lora_30")
+        
         model = model.merge_and_unload()
     
-    model.eval()    # Switch to inference mode (freezes weights)
-    print(f" Model loaded successfully\n")
+    model.eval()
+    print(f" Model loaded and merged successfully\n")
     
-    return model    # Returns the full model, loaded in GPU and ready to use
+    return model
 
 
 def generate_from_prompts_hf(
@@ -398,7 +410,7 @@ Examples:
     parser.add_argument(
         "--lora",  # User label
         type=str,   # Whatever the user types will be treated as a string
-        default="./lora_groove_midi_model2",  
+        default="./lora_groove_midi_model3",  
         help="Path to LoRA adapter"
     )
 

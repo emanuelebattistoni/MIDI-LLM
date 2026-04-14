@@ -11,8 +11,8 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, TaskType
 
 MODEL_NAME   = "slseanwu/MIDI-LLM_Llama-3.2-1B"
-DATASET_PATH = "./data/groove_sft_dataset_hf2.jsonl"
-OUTPUT_DIR   = "./lora_groove_midi_model2"
+DATASET_PATH = "./data/groove_sft_dataset_hf2.jsonl" # Assicurati che questo dataset contenga anche pianoforti!
+OUTPUT_DIR   = "./lora_groove_midi_model3"
 MAX_LENGTH   = 2048  
 
 def main():
@@ -47,11 +47,9 @@ def main():
 
     print("4. Configurazione di LoRA...")
     lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        target_modules=["q_proj", "v_proj", "k_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=0.05,
+        r=32,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        lora_dropout=0.1, 
         bias="none",
         task_type=TaskType.CAUSAL_LM
     )
@@ -62,12 +60,17 @@ def main():
     print("5. Configurazione del Training...")
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
-        per_device_train_batch_size=1,
-        per_device_eval_batch_size=1,
-        gradient_accumulation_steps=8,   
-        learning_rate=2e-4,
+        per_device_train_batch_size=2,
+        per_device_eval_batch_size=2,
+        gradient_accumulation_steps=4,   
+        learning_rate=1e-4,
+        
+        weight_decay=0.01,              
+        warmup_ratio=0.1,              
+        lr_scheduler_type="cosine",   
+        
         logging_steps=10,
-        num_train_epochs=3.05,
+        num_train_epochs=2,
         eval_strategy="steps",
         eval_steps=50,
         save_strategy="steps",
@@ -75,7 +78,7 @@ def main():
         bf16=True,
         gradient_checkpointing=True,     
         optim="adamw_torch_fused",       
-        report_to="tensorboard"
+        report_to="none" 
     )
 
     data_collator = DataCollatorForLanguageModeling( 
