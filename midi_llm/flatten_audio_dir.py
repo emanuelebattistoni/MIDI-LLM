@@ -24,7 +24,7 @@ def main():
     parser.add_argument(
         "--dest", 
         type=str, 
-        default="lora2_eval_set", 
+        default="./data/lora3_eval_set", 
         help="Target directory for flat audio storage (default: fad_eval_set)"
     )
     parser.add_argument(

@@ -47,7 +47,7 @@ def main():
 
     print("4. Configurazione di LoRA...")
     lora_config = LoraConfig(
-        r=32,
+        r=16,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         lora_dropout=0.1, 
         bias="none",
@@ -63,7 +63,7 @@ def main():
         per_device_train_batch_size=2,
         per_device_eval_batch_size=2,
         gradient_accumulation_steps=4,   
-        learning_rate=1e-4,
+        learning_rate=2e-4,
         
         weight_decay=0.01,              
         warmup_ratio=0.1,              
@@ -78,7 +78,7 @@ def main():
         bf16=True,
         gradient_checkpointing=True,     
         optim="adamw_torch_fused",       
-        report_to="none" 
+        report_to="tensorboard" 
     )
 
     data_collator = DataCollatorForLanguageModeling( 

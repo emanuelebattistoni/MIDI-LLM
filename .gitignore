@@ -244,4 +244,7 @@ maestro
 
 lora_groove_midi_model22
 lora_groove_midi_model/
-lora_groove_midi_model3
+data/lora3_eval_results
+data/lora2_eval_results2
+data/lora3_eval_set
+data/lora3_eval_final

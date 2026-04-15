@@ -188,10 +188,10 @@ def prepare_hf_model(model_path: str, lora_path: str = None):
          
         model.add_weighted_adapter(
             adapters=["lora_100"], 
-            weights=[0.3], 
-            adapter_name="lora_30"
+            weights=[0.5], 
+            adapter_name="lora_50"
         )
-        model.set_adapter("lora_30")
+        model.set_adapter("lora_50")
         
         model = model.merge_and_unload()
     
@@ -410,7 +410,7 @@ Examples:
     parser.add_argument(
         "--lora",  # User label
         type=str,   # Whatever the user types will be treated as a string
-        default="./lora_groove_midi_model3",  
+        default="./lora_groove_midi_model22",  
         help="Path to LoRA adapter"
     )
 
