@@ -248,3 +248,6 @@ data/lora3_eval_results
 data/lora2_eval_results2
 data/lora3_eval_set
 data/lora3_eval_final
+lora__test
+data/lora2_eval_final2
+data/lora2_eval2

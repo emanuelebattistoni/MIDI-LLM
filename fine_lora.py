@@ -11,18 +11,18 @@ from transformers import (
 from peft import LoraConfig, get_peft_model, TaskType
 
 MODEL_NAME   = "slseanwu/MIDI-LLM_Llama-3.2-1B"
-DATASET_PATH = "./data/groove_sft_dataset_hf2.jsonl" # Assicurati che questo dataset contenga anche pianoforti!
-OUTPUT_DIR   = "./lora_groove_midi_model3"
+DATASET_PATH = "./data/groove_sft_dataset_hf2.jsonl"
+OUTPUT_DIR   = "./lora__test"
 MAX_LENGTH   = 2048  
 
 def main():
-    print("1. Caricamento del Tokenizer...")
+    print("1. Caricamento del Tokenizer")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = "<|eot_id|>"
         tokenizer.pad_token_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
 
-    print("2. Caricamento del Dataset...")
+    print("2. Caricamento del Dataset")
     dataset = load_dataset("json", data_files=DATASET_PATH, split="train")
     
     if "labels" in dataset.column_names:
@@ -37,7 +37,7 @@ def main():
     eval_dataset  = split_dataset["test"].filter(filter_long)
     print(f"Train: {len(train_dataset)} | Eval: {len(eval_dataset)}")
 
-    print("3. Caricamento del Modello in BF16...")
+    print("3. Caricamento del Modello in BF16")
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         torch_dtype=torch.bfloat16,
@@ -45,9 +45,10 @@ def main():
     )
     model = model.to("cuda") 
 
-    print("4. Configurazione di LoRA...")
+    print("4. Configurazione di LoRA")
     lora_config = LoraConfig(
         r=16,
+        lora_alpha=32,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
         lora_dropout=0.1, 
         bias="none",
@@ -57,7 +58,7 @@ def main():
     model.enable_input_require_grads() 
     model.print_trainable_parameters()
 
-    print("5. Configurazione del Training...")
+    print("5. Configurazione del Training")
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         per_device_train_batch_size=2,
@@ -67,10 +68,10 @@ def main():
         
         weight_decay=0.01,              
         warmup_ratio=0.1,              
-        lr_scheduler_type="cosine",   
+        lr_scheduler_type="cosine",  
         
         logging_steps=10,
-        num_train_epochs=2,
+        num_train_epochs=6,
         eval_strategy="steps",
         eval_steps=50,
         save_strategy="steps",
@@ -86,7 +87,7 @@ def main():
         mlm=False,
     )
 
-    print("6. Avvio dell'addestramento...")
+    print("6. Avvio dell'addestramento")
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -96,10 +97,10 @@ def main():
     )
     trainer.train()
 
-    print("7. Salvataggio del modello LoRA...")
+    print("7. Salvataggio del modello LoRA")
     trainer.save_model(OUTPUT_DIR)
     tokenizer.save_pretrained(OUTPUT_DIR)
-    print(f"Addestramento completato! Adattatori LoRA salvati in {OUTPUT_DIR}")
+    print(f"Addestramento completato. Adattatori LoRA salvati in {OUTPUT_DIR}")
 
 if __name__ == "__main__":
     main()
