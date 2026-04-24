@@ -179,7 +179,7 @@ def prepare_hf_model(model_path: str, lora_path: str = None):
     ).to(device="cuda")         # Transfers the entire model to the NVIDIA GPU's VRAM
     
     if lora_path:
-        print(f"Applicazione e fusione adattatore LoRA al 50% da: {lora_path}")
+        print(f"Applicazione e fusione adattatore LoRA al 30% da: {lora_path}")
         model = PeftModel.from_pretrained(
             model, 
             lora_path,
@@ -188,10 +188,10 @@ def prepare_hf_model(model_path: str, lora_path: str = None):
          
         model.add_weighted_adapter(
             adapters=["lora_100"], 
-            weights=[0.5], 
-            adapter_name="lora_50"
+            weights=[0.3], 
+            adapter_name="lora_30"
         )
-        model.set_adapter("lora_50")
+        model.set_adapter("lora_30")
         
         model = model.merge_and_unload()
     

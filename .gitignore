@@ -241,7 +241,6 @@ groove
 lora
 lora2
 maestro
-
 lora_groove_midi_model22
 lora_groove_midi_model/
 data/lora3_eval_results
@@ -252,3 +251,7 @@ lora__test
 data/lora2_eval_final2
 data/lora2_eval2
 lakh_synthesis_results
+data/lmd_evaluation
+data/lmd_reference  
+data.zip
+data/lora30
